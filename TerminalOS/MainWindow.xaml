@@ -1,0 +1,548 @@
+﻿<Window x:Class="TerminalOS.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:local="clr-namespace:TerminalOS"
+        mc:Ignorable="d"
+        Title="Lotus" Height="700" Width="1200" MinWidth="480" MinHeight="320"
+        Background="#FDECEF"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        FontFamily="Segoe UI">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="40"
+                             ResizeBorderThickness="6"
+                             CornerRadius="0"
+                             GlassFrameThickness="0"
+                             UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
+        <!-- ===================== Theme brushes =====================
+             Single shared brush instances: toggling dark mode mutates each
+             brush's Color in code-behind, which repaints every element that
+             references it (no resource re-lookup needed). -->
+        <SolidColorBrush x:Key="FrameBrush" Color="#FDECEF"/>
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#F0BFC9"/>
+        <SolidColorBrush x:Key="SurfaceBrushSecondary" Color="#F6D9DF"/>
+        <SolidColorBrush x:Key="SurfaceSoftBrush" Color="#FDECEF"/>
+        <SolidColorBrush x:Key="SurfaceSofterBrush" Color="#FFF6F8"/>
+        <SolidColorBrush x:Key="BorderSoftBrush" Color="#FDECEF"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#3A1F27"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5C3944"/>
+        <SolidColorBrush x:Key="TextMutedBrush" Color="#8C6570"/>
+        <SolidColorBrush x:Key="TextFaintBrush" Color="#C99AA6"/>
+        <SolidColorBrush x:Key="TextDisabledBrush" Color="#E3B8C2"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF6F82"/>
+        <SolidColorBrush x:Key="AccentDarkBrush" Color="#8C3A4D"/>
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#E85A70"/>
+        <SolidColorBrush x:Key="HoverSoftBrush" Color="#FBE4E9"/>
+        <SolidColorBrush x:Key="HoverPinkBrush" Color="#F0BFC9"/>
+
+        <!-- ===================== Vector icons (SVG-style path data) ===================== -->
+        <!-- These use the same path mini-language as SVG "d" attributes, so they render as
+             crisp, resolution-independent icons with no image assets or extra dependencies. -->
+        <Geometry x:Key="IconBack">M19,12 L5,12 M11,18 L5,12 L11,6</Geometry>
+        <Geometry x:Key="IconForward">M5,12 L19,12 M13,6 L19,12 L13,18</Geometry>
+        <Geometry x:Key="IconRefresh">M23,4 L23,10 L17,10 M1,20 L1,14 L7,14 M3.51,9 A9,9 0 0 1 18.36,5.64 L23,10 M1,14 L5.64,18.36 A9,9 0 0 0 20.49,15</Geometry>
+        <Geometry x:Key="IconHome">M3,9 L12,2 L21,9 L21,20 A2,2 0 0 1 19,22 L5,22 A2,2 0 0 1 3,20 Z M9,22 L9,12 L15,12 L15,22</Geometry>
+        <Geometry x:Key="IconPlus">M12,5 L12,19 M5,12 L19,12</Geometry>
+        <Geometry x:Key="IconMinus">M5,12 L19,12</Geometry>
+        <Geometry x:Key="IconClose">M6,6 L18,18 M18,6 L6,18</Geometry>
+        <Geometry x:Key="IconStar">M12,2 L15.09,8.26 L22,9.27 L17,14.14 L18.18,21.02 L12,17.77 L5.82,21.02 L7,14.14 L2,9.27 L8.91,8.26 Z</Geometry>
+        <Geometry x:Key="IconLock">M4,11 L20,11 L20,21 L4,21 Z M7,11 L7,7 A5,5 0 0 1 17,7 L17,11</Geometry>
+        <Geometry x:Key="IconWarning">M10.29,3.86 L1.82,18 A2,2 0 0 0 3.53,21 L20.47,21 A2,2 0 0 0 22.18,18 L13.71,3.86 A2,2 0 0 0 10.29,3.86 Z M12,9 L12,13 M12,17 L12.01,17</Geometry>
+        <Geometry x:Key="IconChevronUp">M6,15 L12,9 L18,15</Geometry>
+        <Geometry x:Key="IconChevronDown">M6,9 L12,15 L18,9</Geometry>
+        <Geometry x:Key="IconGlobe">M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 Z M2,12 L22,12 M12,2 A5,10 0 0 0 12,22 A5,10 0 0 1 12,2</Geometry>
+        <Geometry x:Key="IconWinMinimize">M5,12 L19,12</Geometry>
+        <Geometry x:Key="IconWinMaximize">M6,6 L18,6 L18,18 L6,18 Z</Geometry>
+        <Geometry x:Key="IconWinRestore">M9,6 L18,6 L18,15 M6,9 L15,9 L15,18 L6,18 Z</Geometry>
+        <Geometry x:Key="IconDownload">M12,3 L12,14 M7,9 L12,14 L17,9 M4,19 L4,21 L20,21 L20,19</Geometry>
+
+        <!-- ===================== Lotus brand mark (from the supplied SVG artwork) ===================== -->
+        <Geometry x:Key="LotusPetalBottom">M189.37,375.172c-2.521,5.258-3.991,10.68-3.991,16.26c0,25.565,27.584,48.348,70.621,63.188c43.037-14.84,70.621-37.623,70.621-63.188c0-5.4-1.389-10.651-3.756-15.75l-66.869-35.821L189.37,375.172z</Geometry>
+        <Geometry x:Key="LotusPetalWide">M384,286.897H128c-51.787,0-97.939,11.86-128,44.138C30.061,363.311,76.213,384,128,384s97.939-11.861,128-44.138C286.061,372.139,332.213,384,384,384s97.939-20.689,128-52.966C481.94,298.756,435.788,286.897,384,286.897z</Geometry>
+        <Geometry x:Key="LotusPetalTop">M256,57.379c-37.657,33.171-61.793,84.096-61.793,141.241c0,13.591,1.405,26.815,3.993,39.548h115.601c2.588-12.733,3.992-25.955,3.992-39.548C317.793,141.476,293.657,90.55,256,57.379z</Geometry>
+        <Geometry x:Key="LotusPetalLeft">M194.207,216.276c-39.988-32.025-95.218-53.686-141.213-52.941c-0.905,42.244,19.834,87.86,60.902,123.57S207.42,340.651,256,339.864</Geometry>
+        <Geometry x:Key="LotusPetalRight">M256,339.864c48.58,0.787,101.037-17.248,142.104-52.959s61.806-81.325,60.902-123.57c-45.364-0.735-101.518,21.783-141.213,52.94</Geometry>
+        <Geometry x:Key="LotusPetalLeftInner">M105.952,216.294c-0.669,29.572,14.66,61.505,45.014,86.505c30.354,24.999,69.127,37.624,105.034,37.074l-52.965-88.286C173.479,229.166,139.948,215.772,105.952,216.294z</Geometry>
+        <Geometry x:Key="LotusPetalRightInner">M308.966,251.586L256,339.871c35.907,0.552,74.68-12.074,105.034-37.074c30.354-24.999,45.683-56.931,45.014-86.505C372.519,215.779,338.305,229.775,308.966,251.586z</Geometry>
+        <Geometry x:Key="LotusPetalCenter">M194.207,260.414c0,32.143,24.136,60.79,61.793,79.448c37.657-18.658,61.793-47.305,61.793-79.448s-24.136-60.79-61.793-79.448C218.343,199.624,194.207,228.27,194.207,260.414z</Geometry>
+
+        <Style x:Key="VectorIcon" TargetType="Path">
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="StrokeThickness" Value="1.8"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="Fill" Value="Transparent"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+        </Style>
+
+        <!-- ===================== Chrome tab ===================== -->
+        <Style x:Key="ChromeTabItem" TargetType="TabItem">
+            <Setter Property="MaxWidth" Value="220"/>
+            <!-- Floor so there's always at least enough room for the close button
+                 itself, even when UpdateTabWidths (code-behind) computes a per-tab
+                 width smaller than that. -->
+            <Setter Property="MinWidth" Value="30"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Grid Height="36" Margin="0,4,0,0"
+                              AllowDrop="True"
+                              shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                              PreviewMouseLeftButtonDown="Tab_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="Tab_PreviewMouseMove"
+                              Drop="Tab_Drop">
+                            <Border x:Name="Border"
+                                    CornerRadius="10,10,0,0"
+                                    Margin="1,0,0,0"
+                                    Padding="12,0,8,0"
+                                    Background="Transparent"
+                                    ClipToBounds="True">
+                                <!-- Two columns: the close button gets its own Auto column,
+                                     which Grid ALWAYS sizes to the button's full natural size
+                                     no matter how little room is left - it is never treated as
+                                     negotiable space the way a shared/star column would be.
+                                     The favicon+title live in the remaining star column, which
+                                     is separately ClipToBounds so nothing in there (long titles,
+                                     a bigger-than-expected favicon) can ever be measured or
+                                     rendered on top of the close button's column. -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <Grid Grid.Column="0" ClipToBounds="True">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <Grid Grid.Column="0" Width="14" Height="14" Margin="0,0,8,0">
+                                            <Path x:Name="FavIcon" Style="{StaticResource VectorIcon}"
+                                                  Data="{StaticResource IconGlobe}"
+                                                  Width="13" Height="13" Stroke="{StaticResource TextFaintBrush}" StrokeThickness="1.3"
+                                                  Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.ShowFallbackDot, Converter={StaticResource BoolToVis}}"/>
+                                            <Image Width="14" Height="14"
+                                                   Source="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.Favicon}"/>
+                                        </Grid>
+
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.Title}"
+                                                   Foreground="{StaticResource TextMutedBrush}"
+                                                   FontSize="12.5"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"
+                                                   MinWidth="0"/>
+                                    </Grid>
+
+                                    <Border Grid.Column="1" Width="20" Height="20" Margin="8,0,0,0"
+                                            Panel.ZIndex="10">
+                                        <Button x:Name="CloseButton"
+                                                Width="20" Height="20"
+                                                Padding="0"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Foreground="{StaticResource TextMutedBrush}"
+                                                Cursor="Hand"
+                                                Tag="{Binding RelativeSource={RelativeSource TemplatedParent}}"
+                                                Click="CloseTab_Click">
+                                            <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconClose}"
+                                                  Width="9" Height="9" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.6"/>
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border CornerRadius="10" Background="{TemplateBinding Background}">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="{StaticResource HoverPinkBrush}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Border>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="{StaticResource FrameBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="False">
+                                <Setter TargetName="Border" Property="Background" Value="#F0BFC9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===================== Circular toolbar button ===================== -->
+        <Style x:Key="ToolbarButton" TargetType="Button">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" CornerRadius="15" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverSoftBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PillButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" CornerRadius="6" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource SurfaceSoftBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+
+        <!-- ===================== Custom title bar caption buttons ===================== -->
+        <Style x:Key="CaptionButton" TargetType="Button">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentDarkBrush}"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverPinkBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CloseCaptionButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#E81123"/>
+                                <Setter Property="Foreground" Value="#F0BFC9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+    </Window.Resources>
+
+    <DockPanel LastChildFill="True">
+
+        <!-- ===================== Title bar + tab strip (Edge-style single row) ===================== -->
+        <Border x:Name="TitleBar" DockPanel.Dock="Top" Height="40" Background="{StaticResource SurfaceBrush}"
+                SizeChanged="TitleBar_SizeChanged">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Brand mark (non-interactive, sits in the draggable caption area) -->
+                <Viewbox Grid.Column="0" Width="16" Height="16" Margin="10,0,6,0"
+                         VerticalAlignment="Center" IsHitTestVisible="False">
+                    <Canvas Width="512" Height="512">
+                        <Path Data="{StaticResource LotusPetalBottom}" Fill="#FF828C"/>
+                        <Path Data="{StaticResource LotusPetalWide}" Fill="#FF96A0"/>
+                        <Path Data="{StaticResource LotusPetalTop}" Fill="#FFA6B1"/>
+                        <Path Data="{StaticResource LotusPetalLeft}" Fill="#FFA6B1"/>
+                        <Path Data="{StaticResource LotusPetalRight}" Fill="#FFA6B1"/>
+                        <Path Data="{StaticResource LotusPetalLeftInner}" Fill="#FF96A0"/>
+                        <Path Data="{StaticResource LotusPetalRightInner}" Fill="#FF96A0"/>
+                        <Path Data="{StaticResource LotusPetalCenter}" Fill="#FF828C"/>
+                    </Canvas>
+                </Viewbox>
+
+                <!-- Tabs -->
+                <TabControl x:Name="BrowserTabs" Grid.Column="1"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Bottom"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            ItemContainerStyle="{StaticResource ChromeTabItem}"
+                            SelectionChanged="BrowserTabs_SelectionChanged"/>
+
+                <!-- New tab -->
+                <Button Grid.Column="2" x:Name="NewTabButton"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                        ToolTip="New Tab (Ctrl+T)" Style="{StaticResource ToolbarButton}"
+                        Width="30" Height="30" Margin="4,0,0,0" VerticalAlignment="Center"
+                        Click="NewTab_Click">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconPlus}"
+                          Width="14" Height="14"
+                          Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                </Button>
+
+                <!-- Column 3 is left empty: any unclaimed space in the caption-height band
+                     above is the window's drag region, courtesy of WindowChrome. -->
+
+                <!-- Column 4 intentionally left empty: the app menu ("...") button used to
+                     live here. It's been removed - the settings panel it opened is now
+                     reached by navigating to lotus://settings instead. -->
+
+                <!-- Window caption buttons -->
+                <StackPanel Grid.Column="5" Orientation="Horizontal">
+                    <Button x:Name="MinimizeButton" Style="{StaticResource CaptionButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            ToolTip="Minimize" Click="Minimize_Click">
+                        <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconWinMinimize}"
+                              Width="10" Height="10" Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                    </Button>
+                    <Button x:Name="MaximizeRestoreButton" Style="{StaticResource CaptionButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            ToolTip="Maximize" Click="MaximizeRestore_Click">
+                        <Path x:Name="MaximizeRestoreIcon" Style="{StaticResource VectorIcon}" Data="{StaticResource IconWinMaximize}"
+                              Width="10" Height="10" StrokeThickness="1.4"
+                              Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                    </Button>
+                    <Button x:Name="CloseWindowButton" Style="{StaticResource CloseCaptionButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            ToolTip="Close" Click="CloseWindow_Click">
+                        <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconClose}"
+                              Width="11" Height="11" StrokeThickness="1.5"
+                              Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===================== Navigation toolbar ===================== -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource FrameBrush}" Padding="10,8" BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" x:Name="BackButton" Style="{StaticResource ToolbarButton}" ToolTip="Back (Alt+Left)" Click="Back_Click">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconBack}" Width="16" Height="16"
+                          Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                </Button>
+                <Button Grid.Column="1" x:Name="ForwardButton" Style="{StaticResource ToolbarButton}" ToolTip="Forward (Alt+Right)" Click="Forward_Click">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconForward}" Width="16" Height="16"
+                          Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                </Button>
+                <Button Grid.Column="2" x:Name="RefreshButton" Style="{StaticResource ToolbarButton}" ToolTip="Reload (Ctrl+R)" Click="Refresh_Click">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconRefresh}" Width="15" Height="15"
+                          Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                </Button>
+                <Button Grid.Column="3" x:Name="HomeButton" Style="{StaticResource ToolbarButton}" ToolTip="Home" Click="Home_Click">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconHome}" Width="15" Height="15"
+                          Stroke="{Binding RelativeSource={RelativeSource AncestorType=Button}, Path=Foreground}"/>
+                </Button>
+
+                <!-- Omnibox -->
+                <Border Grid.Column="5" Background="{StaticResource SurfaceBrushSecondary}" CornerRadius="18" Padding="14,0" Height="36"
+                        BorderThickness="1" BorderBrush="{StaticResource SurfaceSoftBrush}">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True">
+                                    <Setter Property="Background" Value="#F0BFC9"/>
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <DockPanel VerticalAlignment="Center">
+                        <Path x:Name="SecurityIcon" DockPanel.Dock="Left"
+                              Style="{StaticResource VectorIcon}" Data="{StaticResource IconLock}"
+                              Width="13" Height="13" Stroke="#1E8E3E" StrokeThickness="1.6"
+                              VerticalAlignment="Center" Margin="0,0,10,0"
+                              ToolTip="Connection is secure"/>
+                        <Path x:Name="BookmarkStar" DockPanel.Dock="Right"
+                              Style="{StaticResource VectorIcon}" Data="{StaticResource IconStar}"
+                              Width="15" Height="15" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.6" Fill="Transparent"
+                              VerticalAlignment="Center" Margin="8,0,0,0"
+                              Cursor="Hand" ToolTip="Bookmark this page (Ctrl+D)"
+                              MouseLeftButtonUp="BookmarkStar_Click"/>
+                        <TextBox x:Name="AddressBar"
+                                 Background="Transparent"
+                                 Foreground="{StaticResource TextPrimaryBrush}"
+                                 CaretBrush="{StaticResource TextPrimaryBrush}"
+                                 BorderThickness="0"
+                                 VerticalContentAlignment="Center"
+                                 FontSize="13.5"
+                                 Height="34"
+                                 KeyDown="AddressBar_KeyDown"/>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ===================== Bookmarks bar ===================== -->
+        <Border x:Name="BookmarksBar" DockPanel.Dock="Top" Background="{StaticResource FrameBrush}" Padding="8,4"
+                BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}" Visibility="Collapsed">
+            <ItemsControl x:Name="BookmarksList">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Style="{StaticResource PillButton}" Click="BookmarkChip_Click" Tag="{Binding Url}"
+                                ToolTip="{Binding Url}">
+                            <TextBlock Text="{Binding Title}" FontSize="12"/>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
+        <!-- ===================== Find in page bar ===================== -->
+        <Border x:Name="FindBar" DockPanel.Dock="Top" Background="#5C3944" Padding="10,6" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="FindBox" Width="220" Height="26" VerticalContentAlignment="Center"
+                         Padding="6,0" KeyDown="FindBox_KeyDown" TextChanged="FindBox_TextChanged"/>
+                <Button Width="26" Height="26" Margin="6,0,0,0" Click="FindPrev_Click"
+                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconChevronUp}"
+                          Width="14" Height="14" Stroke="#F0BFC9"/>
+                </Button>
+                <Button Width="26" Height="26" Click="FindNext_Click"
+                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconChevronDown}"
+                          Width="14" Height="14" Stroke="#F0BFC9"/>
+                </Button>
+                <Button Width="26" Height="26" Margin="10,0,0,0" Click="FindClose_Click"
+                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                    <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconClose}"
+                          Width="12" Height="12" Stroke="#F0BFC9"/>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ===================== History panel ===================== -->
+        <Border x:Name="HistoryPanel" DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                Visibility="Collapsed" Padding="16" BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}" MaxHeight="320">
+            <DockPanel>
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                    <TextBlock Text="History" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" FontSize="14"/>
+                    <Button Content="Clear all history" HorizontalAlignment="Right" Style="{StaticResource PillButton}"
+                            FontSize="11.5" Click="ClearHistory_Click"/>
+                </Grid>
+                <ListBox x:Name="HistoryList" BorderThickness="0" Background="Transparent"
+                         MouseDoubleClick="HistoryList_MouseDoubleClick">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <TextBlock Text="{Binding VisitedAt, StringFormat='HH:mm'}" Foreground="{StaticResource TextFaintBrush}" Width="50" FontSize="11.5"/>
+                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextPrimaryBrush}" FontSize="12.5" Width="260" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding Url}" Foreground="{StaticResource TextMutedBrush}" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- ===================== Download shelf (Chrome-style bottom bar) ===================== -->
+        <Border x:Name="DownloadShelf" DockPanel.Dock="Bottom" Background="{StaticResource FrameBrush}"
+                BorderThickness="0,1,0,0" BorderBrush="{StaticResource BorderSoftBrush}" Padding="8" Visibility="Collapsed">
+            <ItemsControl x:Name="DownloadsList" ItemsSource="{Binding Downloads}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,8,0" Width="220" Cursor="Hand"
+                                MouseLeftButtonUp="DownloadItem_Click" Tag="{Binding}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding FileName}" FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding StatusText}" FontSize="10.5" Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,4"/>
+                                <ProgressBar Height="3" Minimum="0" Maximum="100" Value="{Binding Progress, Mode=OneWay}"
+                                             Visibility="{Binding IsInProgress, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
+        <!-- ===================== Active page content =====================
+             Margin on the sides/bottom lets the window's frame color (FrameBrush)
+             show through, framing the page. CornerRadius rounds that frame, and
+             the thin side border traces it - all independent of the outer window
+             shape, which stays square (see WindowChrome CornerRadius="0" above). -->
+        <Border Margin="5,5,5,5" CornerRadius="8" ClipToBounds="True" Background="#F6D9DF">
+            <Grid x:Name="ContentHost" Background="Transparent"/>
+        </Border>
+
+    </DockPanel>
+</Window>
