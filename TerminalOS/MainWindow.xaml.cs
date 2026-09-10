@@ -398,8 +398,6 @@ namespace TerminalOS
 
             core.FaviconChanged += async (s, e) =>
             {
-                try
-                {
                     using var stream = await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
                     if (stream == null) { header.Favicon = null; return; }
                     var bmp = new BitmapImage();
@@ -407,10 +405,7 @@ namespace TerminalOS
                     bmp.CacheOption = BitmapCacheOption.OnLoad;
                     bmp.StreamSource = stream;
                     bmp.EndInit();
-                    bmp.Freeze();
                     header.Favicon = bmp;
-                }
-                catch { header.Favicon = null; }
             };
 
             core.NavigationStarting += (s, e) =>
@@ -421,7 +416,6 @@ namespace TerminalOS
                 // the fallback globe rather than briefly redisplaying the old page's
                 // icon while we're still deciding.
                 header.IsLoading = true;
-                header.Favicon = null;
                 UpdateSecurityIcon(browser);
             };
 
