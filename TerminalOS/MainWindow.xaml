@@ -66,6 +66,12 @@
         <Geometry x:Key="IconWinRestore">M9,6 L18,6 L18,15 M6,9 L15,9 L15,18 L6,18 Z</Geometry>
         <Geometry x:Key="IconDownload">M12,3 L12,14 M7,9 L12,14 L17,9 M4,19 L4,21 L20,21 L20,19</Geometry>
 
+        <!-- Lotus spinner: a ¾-circle arc used as the tab's loading indicator.
+             The animation on the Path below rotates a RotateTransform attached
+             to this geometry. Kept as a separate resource so it renders crisply
+             at any DPI. -->
+        <Geometry x:Key="IconLotusSpinner">M 7,1.5 A 5.5,5.5 0 1 1 1.5,7</Geometry>
+
         <!-- ===================== Lotus brand mark (from the supplied SVG artwork) ===================== -->
         <Geometry x:Key="LotusPetalBottom">M189.37,375.172c-2.521,5.258-3.991,10.68-3.991,16.26c0,25.565,27.584,48.348,70.621,63.188c43.037-14.84,70.621-37.623,70.621-63.188c0-5.4-1.389-10.651-3.756-15.75l-66.869-35.821L189.37,375.172z</Geometry>
         <Geometry x:Key="LotusPetalWide">M384,286.897H128c-51.787,0-97.939,11.86-128,44.138C30.061,363.311,76.213,384,128,384s97.939-11.861,128-44.138C286.061,372.139,332.213,384,384,384s97.939-20.689,128-52.966C481.94,298.756,435.788,286.897,384,286.897z</Geometry>
@@ -128,13 +134,65 @@
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
 
+                                        <!-- ===================== Favicon slot =====================
+                                             Three layered elements share this 14x14 box. Exactly one
+                                             is visible at a time:
+
+                                               1) LoadingSpinner  - shown while the page is loading.
+                                               2) Image           - the real page favicon, once it has
+                                                                    arrived and the page is done loading.
+                                               3) FavIcon (Path)  - the fallback globe, used when a
+                                                                    page has no favicon at all.
+
+                                             The visibility bindings are driven by TabHeaderInfo's
+                                             IsLoading / ShowFavicon / ShowFallbackDot properties. -->
                                         <Grid Grid.Column="0" Width="14" Height="14" Margin="0,0,8,0">
+
+                                            <!-- Real page favicon -->
+                                            <Image Width="14" Height="14"
+                                                   Source="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.Favicon}"
+                                                   Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.ShowFavicon, Converter={StaticResource BoolToVis}}"/>
+
+                                            <!-- Fallback globe icon (page has no favicon) -->
                                             <Path x:Name="FavIcon" Style="{StaticResource VectorIcon}"
                                                   Data="{StaticResource IconGlobe}"
                                                   Width="13" Height="13" Stroke="{StaticResource TextFaintBrush}" StrokeThickness="1.3"
                                                   Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.ShowFallbackDot, Converter={StaticResource BoolToVis}}"/>
-                                            <Image Width="14" Height="14"
-                                                   Source="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.Favicon}"/>
+
+                                            <!-- Lotus loading spinner. A ¾-circle arc drawn in the accent
+                                                 color and rotated forever. The storyboard is attached via
+                                                 an EventTrigger on Loaded so it kicks in as soon as the tab
+                                                 template is instantiated; the Visibility binding above simply
+                                                 hides/shows it while the page is / isn't loading. -->
+                                            <Path x:Name="LoadingSpinner"
+                                                  Data="{StaticResource IconLotusSpinner}"
+                                                  Stretch="Uniform"
+                                                  Width="14" Height="14"
+                                                  Stroke="{StaticResource AccentBrush}"
+                                                  StrokeThickness="1.6"
+                                                  StrokeStartLineCap="Round"
+                                                  StrokeEndLineCap="Round"
+                                                  Fill="Transparent"
+                                                  SnapsToDevicePixels="True"
+                                                  RenderTransformOrigin="0.5,0.5"
+                                                  Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.IsLoading, Converter={StaticResource BoolToVis}}">
+                                                <Path.RenderTransform>
+                                                    <RotateTransform Angle="0"/>
+                                                </Path.RenderTransform>
+                                                <Path.Triggers>
+                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation
+                                                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                                    From="0" To="360"
+                                                                    Duration="0:0:1"
+                                                                    RepeatBehavior="Forever"/>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
+                                                </Path.Triggers>
+                                            </Path>
                                         </Grid>
 
                                         <TextBlock Grid.Column="1"

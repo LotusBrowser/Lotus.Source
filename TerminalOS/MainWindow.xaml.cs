@@ -345,7 +345,11 @@ namespace TerminalOS
         private async Task AddNewTab(string url)
         {
             var browser = new WebView2();
-            var header = new TabHeaderInfo { Title = "New Tab" };
+
+            // Start the tab in its loading state so the spinner is what the user
+            // sees the instant the tab is created - before any NavigationStarting
+            // event has had a chance to fire from the WebView2 below.
+            var header = new TabHeaderInfo { Title = "New Tab", IsLoading = true };
             var tab = new TabItem { Header = header };
 
             _browsers[tab] = browser;
@@ -409,8 +413,25 @@ namespace TerminalOS
                 catch { header.Favicon = null; }
             };
 
+            core.NavigationStarting += (s, e) =>
+            {
+                // Flip the tab into its loading state: the favicon slot will show
+                // the Lotus spinner. Clear any previous favicon too, so that if the
+                // new page turns out to have no favicon at all, we fall through to
+                // the fallback globe rather than briefly redisplaying the old page's
+                // icon while we're still deciding.
+                header.IsLoading = true;
+                header.Favicon = null;
+                UpdateSecurityIcon(browser);
+            };
+
             core.NavigationCompleted += (s, e) =>
             {
+                // Page (or navigation attempt) is done - drop the spinner. The
+                // favicon slot will now resolve to either the real page favicon
+                // (if FaviconChanged delivered one) or the fallback globe.
+                header.IsLoading = false;
+
                 if (e.IsSuccess && core.Source != null && !core.Source.StartsWith("data:"))
                 {
                     var entry = new HistoryEntry
@@ -551,8 +572,6 @@ namespace TerminalOS
                     });
                 };
             };
-
-            core.NavigationStarting += (s, e) => UpdateSecurityIcon(browser);
 
             // Let our own shortcuts (Ctrl+F, Ctrl+T, Ctrl+P, etc.) win instead of
             // Chromium's built-in accelerator handling, so they bubble up to
@@ -1288,6 +1307,7 @@ namespace TerminalOS
     {
         private string _title = "New Tab";
         private ImageSource _favicon;
+        private bool _isLoading;
 
         public string Title
         {
@@ -1298,10 +1318,36 @@ namespace TerminalOS
         public ImageSource Favicon
         {
             get => _favicon;
-            set { _favicon = value; OnChanged(nameof(Favicon)); OnChanged(nameof(ShowFallbackDot)); }
+            set
+            {
+                _favicon = value;
+                OnChanged(nameof(Favicon));
+                OnChanged(nameof(ShowFavicon));
+                OnChanged(nameof(ShowFallbackDot));
+            }
         }
 
-        public bool ShowFallbackDot => Favicon == null;
+        // True while the tab's WebView2 is between NavigationStarting and
+        // NavigationCompleted. Drives the Lotus spinner in the favicon slot.
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set
+            {
+                _isLoading = value;
+                OnChanged(nameof(IsLoading));
+                OnChanged(nameof(ShowFavicon));
+                OnChanged(nameof(ShowFallbackDot));
+            }
+        }
+
+        // The real page favicon is only shown once the page is done loading
+        // AND a favicon was actually delivered via FaviconChanged.
+        public bool ShowFavicon => !IsLoading && Favicon != null;
+
+        // The fallback globe is only shown when the page is done loading AND
+        // we have no favicon to display for it.
+        public bool ShowFallbackDot => !IsLoading && Favicon == null;
 
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
