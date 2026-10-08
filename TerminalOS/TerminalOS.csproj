@@ -9,6 +9,9 @@
     <AssemblyTitle>Lotus</AssemblyTitle>
     <AssemblyName>Lotus</AssemblyName>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+    <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
+    <SignAssembly>True</SignAssembly>
+    <AssemblyOriginatorKeyFile>D:\Lotus.Source\Lotus.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,5 +21,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="call build-installer.ps1 -Version $(VersionPrefix)" />
+  </Target>
 
 </Project>

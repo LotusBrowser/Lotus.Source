@@ -484,6 +484,7 @@ namespace TerminalOS
                     string raw;
                     try { raw = e.TryGetWebMessageAsString(); }
                     catch { return; }
+                    if (TryHandleSysInfoMessage(core, e.Source, raw)) return;
                     HandleSettingsPageMessage(raw);
                 }
             };
@@ -754,6 +755,10 @@ namespace TerminalOS
             {
                 input = SettingsUrl;
             }
+            else if (IsLotusSysInfoUrl(input))
+            {
+                input = SysInfoUrl;
+            }
             else if (!input.StartsWith("http://") && !input.StartsWith("https://") &&
                 !input.StartsWith("view-source:") && !input.StartsWith("data:") &&
                 !input.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase))
@@ -785,6 +790,10 @@ namespace TerminalOS
                 else if (string.Equals(uri.Host, "settings", StringComparison.OrdinalIgnoreCase))
                 {
                     html = BuildSettingsPageHtml();
+                }
+                else if (string.Equals(uri.Host, "sysinfo", StringComparison.OrdinalIgnoreCase))
+                {
+                    html = BuildSysInfoPageHtml();
                 }
 
                 if (html != null)
