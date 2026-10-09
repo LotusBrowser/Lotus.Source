@@ -1,70 +1,89 @@
 <#
 .SYNOPSIS
-    Publishes Lotus and builds a Windows installer (Setup-Lotus-<version>.exe).
+    Publishes Lotus and builds the custom installer (Setup-Lotus-<version>.exe).
 
 .DESCRIPTION
-    1. dotnet publish - self-contained, single-file, win-x64 release build.
-    2. Runs Inno Setup (ISCC.exe) against LotusSetup.iss to produce the installer.
+    1. dotnet publish Lotus  - self-contained, single-file, win-x64.
+    2. Zips the publish output into payload.zip.
+    3. dotnet publish Lotus.Installer - the small WPF setup stub.
+    4. Appends payload.zip to the stub: [exe][payload.zip][int64 length]["LOTUSPAY"].
 
-.NOTES
-    Requires Inno Setup (https://jrsoftware.org/isinfo.php) to be installed.
-    Default install path checked: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
-    Run this from the repo root (same folder as TerminalOS.csproj).
+    No Inno Setup (or any other tool) required - just the .NET SDK.
+    Output: TerminalOS\installer-output\Setup-Lotus-<version>.exe
+
+    Installer switches (for scripting / winget):
+      Setup-Lotus-1.0.0.exe /silent [/dir=C:\path] [/nodesktop]
+      Uninstall.exe /uninstall /silent [/deletedata]
 #>
 
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "0.3.1",
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64"
 )
 
 $ErrorActionPreference = "Stop"
 
-$root        = $PSScriptRoot
-$csproj      = Join-Path $root "TerminalOS.csproj"
-$publishDir  = Join-Path $root "publish\$Runtime"
-$issScript   = Join-Path $root "LotusSetup.iss"
+# Stops the TerminalOS.csproj post-build hook from calling this script again.
+$env:LOTUS_PUBLISHING = "1"
 
+$root       = $PSScriptRoot
+$repo       = Split-Path $root -Parent
+$appProj    = Join-Path $root "TerminalOS.csproj"
+$setupProj  = Join-Path $repo "Lotus.Installer\Lotus.Installer.csproj"
+$publishDir = Join-Path $root "publish\$Runtime"
+$work       = Join-Path $root "installer-build"
+$stubDir    = Join-Path $work "stub"
+$outDir     = Join-Path $root "installer-output"
+$payload    = Join-Path $work "payload.zip"
+
+foreach ($d in @($publishDir, $work)) { if (Test-Path $d) { Remove-Item $d -Recurse -Force } }
+New-Item -ItemType Directory -Force -Path $work, $outDir | Out-Null
+
+# 1. Publish Lotus ---------------------------------------------------------
 Write-Host "==> Publishing Lotus v$Version ($Configuration, $Runtime)..." -ForegroundColor Cyan
-
-if (Test-Path $publishDir) {
-    Remove-Item $publishDir -Recurse -Force
-}
-
-dotnet publish $csproj `
-    -c $Configuration `
-    -r $Runtime `
-    --self-contained true `
+dotnet publish $appProj `
+    -c $Configuration -r $Runtime --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:EnableCompressionInSingleFile=true `
-    -p:Version=$Version `
-    -p:FileVersion=$Version `
+    -p:Version=$Version -p:FileVersion=$Version `
     -o $publishDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish (Lotus) failed." }
 
-if ($LASTEXITCODE -ne 0) {
-    throw "dotnet publish failed."
-}
+# 2. payload.zip -----------------------------------------------------------
+Write-Host "==> Creating payload..." -ForegroundColor Cyan
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$publishFull = (Resolve-Path $publishDir).Path.TrimEnd('\') + '\'
+$zip = [System.IO.Compression.ZipFile]::Open($payload, 'Create')
+try {
+    Get-ChildItem $publishDir -Recurse -File | Where-Object { $_.Extension -ne '.pdb' } | ForEach-Object {
+        $rel = $_.FullName.Substring($publishFull.Length).Replace('\', '/')
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $rel, 'Optimal')
+    }
+} finally { $zip.Dispose() }
 
-Write-Host "==> Publish complete: $publishDir" -ForegroundColor Green
+# 3. Installer stub --------------------------------------------------------
+Write-Host "==> Building installer stub..." -ForegroundColor Cyan
+dotnet publish $setupProj -c Release -p:Version=$Version -o $stubDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish (Lotus.Installer) failed." }
 
-# --- Locate Inno Setup compiler ---
-$isccCandidates = @(
-    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    "C:\Program Files\Inno Setup 6\ISCC.exe"
-)
-$iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+# 4. Stub + payload --------------------------------------------------------
+$setupExe = Join-Path $outDir "Setup-Lotus-$Version.exe"
+Copy-Item (Join-Path $stubDir "LotusSetup.exe") $setupExe -Force
 
-if (-not $iscc) {
-    throw "Could not find ISCC.exe. Install Inno Setup 6 from https://jrsoftware.org/isdl.php, or edit `$isccCandidates in this script to point at your install."
-}
+$len = (Get-Item $payload).Length
+$out = [System.IO.File]::Open($setupExe, 'Append', 'Write')
+try {
+    $in = [System.IO.File]::OpenRead($payload)
+    try { $in.CopyTo($out) } finally { $in.Dispose() }
+    $lenBytes = [BitConverter]::GetBytes([int64]$len)
+    $out.Write($lenBytes, 0, 8)
+    $magic = [System.Text.Encoding]::ASCII.GetBytes("LOTUSPAY")
+    $out.Write($magic, 0, 8)
+} finally { $out.Dispose() }
 
-Write-Host "==> Building installer with Inno Setup..." -ForegroundColor Cyan
-
-& $iscc "/DMyAppVersion=$Version" "/DPublishDir=$publishDir" $issScript
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Inno Setup compile failed."
-}
-
-Write-Host "==> Done. Installer is in the 'installer-output' folder." -ForegroundColor Green
+$hash = (Get-FileHash $setupExe -Algorithm SHA256).Hash
+Write-Host "==> Done: $setupExe" -ForegroundColor Green
+Write-Host "    SHA256: $hash"
