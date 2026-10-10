@@ -1,0 +1,45 @@
+Lotus Source-Available License
+
+Copyright (c) 2026 Lotus. All rights reserved.
+
+1. GRANT
+You are granted a non-exclusive, non-transferable, revocable license to:
+  (a) download, view, and run the Software;
+  (b) modify the Software for your own personal use.
+
+2. RESTRICTIONS
+You may not:
+  (a) distribute, publish, sublicense, sell, or otherwise make available
+      the Software, in source or compiled form, to any third party;
+  (b) distribute, publish, or make available any modified version of the
+      Software, or any work derived from it, to any third party;
+  (c) use the Software or any modified version for commercial purposes;
+  (d) remove or alter this license or copyright notices.
+
+3. GITHUB
+This Software is hosted on GitHub. GitHub's Terms of Service allow
+users to view and fork public repositories within GitHub. Such forks
+may be used only in accordance with this license. Forking does not grant
+any right to redistribute the Software or any modified version beyond
+what this license permits, and forks may be used only for personal use.
+
+4. CONTRIBUTIONS
+If you submit changes to the Licensor (e.g. a pull request), you grant the
+Licensor a perpetual, worldwide, royalty-free license to use, modify, and
+distribute your contribution as part of the Software under any terms.
+
+5. OWNERSHIP
+The Software is licensed, not sold. The Licensor retains all rights not
+expressly granted here.
+
+6. TERMINATION
+This license terminates automatically if you breach any of its terms.
+On termination you must delete all copies of the Software and any
+modified versions.
+
+7. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF
+THE SOFTWARE.
