@@ -605,6 +605,7 @@ namespace TerminalOS
         private string BuildSysInfoPageHtml()
         {
             return SysInfoPageTemplate
+                .Replace("%%THEME%%", ThemeManager.BuildCssVariables())
                 .Replace("%%FAVICON%%", LotusFaviconDataUri())
                 .Replace("%%LOGO%%", LotusSvg(40));
         }
@@ -614,51 +615,52 @@ namespace TerminalOS
         private const string SysInfoPageTemplate = """
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>SysInfo</title>
 <link rel='icon' type='image/svg+xml' href="data:image/svg+xml,%%FAVICON%%">
+<style id='lotus-theme'>%%THEME%%</style>
 <style>
-body { background:#F6D9DF; font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
-       align-items:center; padding:70px 20px 60px; margin:0; color:#3A1F27; }
+body { background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
+       align-items:center; padding:70px 20px 60px; margin:0; color:var(--text-primary); }
 .logo { display:flex; align-items:center; gap:14px; margin-bottom:36px; }
-.logo span { font-size:32px; font-weight:600; color:#8C3A4D; letter-spacing:.5px; }
+.logo span { font-size:32px; font-weight:600; color:var(--accent-dark); letter-spacing:.5px; }
 .page { width:100%; max-width:640px; }
-.card { background:#FBE4E9; border-radius:14px; padding:20px 22px; margin-bottom:20px;
-        box-shadow:0 1px 4px rgba(140,56,77,.12); }
-.card h2 { margin:0 0 14px; font-size:14px; font-weight:600; color:#8C3A4D;
+.card { background:var(--hover-soft); border-radius:14px; padding:20px 22px; margin-bottom:20px;
+        box-shadow:0 1px 4px var(--shadow); }
+.card h2 { margin:0 0 14px; font-size:14px; font-weight:600; color:var(--accent-dark);
            text-transform:uppercase; letter-spacing:.5px; }
-.muted { font-size:12.5px; color:#8C6570; margin:2px 0 12px; }
+.muted { font-size:12.5px; color:var(--text-muted); margin:2px 0 12px; }
 .status { font-size:14px; margin:0 0 4px; }
-.status.error { color:#B3261E; }
-.versions { font-size:12.5px; color:#8C6570; margin-bottom:14px; }
-.bar { height:8px; background:#F0BFC9; border-radius:4px; overflow:hidden; margin:10px 0 6px; }
-.fill { height:100%; width:0; background:#FF6F82; transition:width .1s linear; }
+.status.error { color:var(--error); }
+.versions { font-size:12.5px; color:var(--text-muted); margin-bottom:14px; }
+.bar { height:8px; background:var(--hover-pink); border-radius:4px; overflow:hidden; margin:10px 0 6px; }
+.fill { height:100%; width:0; background:var(--accent); transition:width .1s linear; }
 .fill.indeterminate { width:40%; animation:slide 1.1s ease-in-out infinite alternate; }
 @keyframes slide { from { margin-left:0; } to { margin-left:60%; } }
 .opt { display:flex; gap:12px; align-items:flex-start; padding:10px 0; cursor:pointer; }
 .opt.disabled { opacity:.45; cursor:default; }
-.opt input { accent-color:#FF6F82; width:18px; height:18px; margin:2px 0 0; cursor:inherit; flex:none; }
+.opt input { accent-color:var(--accent); width:18px; height:18px; margin:2px 0 0; cursor:inherit; flex:none; }
 .opt .t { font-size:14px; }
-.opt code, .cmd code { font-family:Consolas,'Cascadia Mono',monospace; font-size:12.5px; background:#F6D9DF;
-                       border-radius:6px; padding:1px 6px; color:#8C3A4D; }
-.opt small { display:block; font-size:12.5px; color:#8C6570; margin-top:3px; }
+.opt code, .cmd code { font-family:Consolas,'Cascadia Mono',monospace; font-size:12.5px; background:var(--surface-secondary);
+                       border-radius:6px; padding:1px 6px; color:var(--accent-dark); }
+.opt small { display:block; font-size:12.5px; color:var(--text-muted); margin-top:3px; }
 details { margin:6px 0 4px; }
-summary { font-size:13px; color:#8C3A4D; cursor:pointer; padding:6px 0; }
+summary { font-size:13px; color:var(--accent-dark); cursor:pointer; padding:6px 0; }
 .field { display:flex; flex-direction:column; gap:4px; margin:6px 0 6px 0; font-size:13px; }
-.field input { height:34px; border-radius:17px; border:1px solid #F3D3D9; padding:0 14px; font-size:13px;
-               background:#FFF6F8; outline:none; font-family:inherit; }
+.field input { height:34px; border-radius:17px; border:1px solid var(--input-border); padding:0 14px; font-size:13px;
+               background:var(--surface-softer); outline:none; font-family:inherit; }
 .field input:disabled { opacity:.5; }
-.cmd { display:flex; align-items:center; gap:10px; background:#FFF6F8; border:1px solid #F3D3D9;
+.cmd { display:flex; align-items:center; gap:10px; background:var(--surface-softer); border:1px solid var(--input-border);
        border-radius:10px; padding:10px 12px; margin:14px 0 8px; }
-.cmd code { flex:1; background:none; padding:0; font-size:13.5px; color:#3A1F27; overflow-x:auto; white-space:nowrap; }
+.cmd code { flex:1; background:none; padding:0; font-size:13.5px; color:var(--text-primary); overflow-x:auto; white-space:nowrap; }
 .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
 button { font-family:inherit; font-size:13px; border:none; border-radius:18px; padding:9px 18px; cursor:pointer; }
 button:disabled { opacity:.45; cursor:default; }
-.accent-btn { background:#FF6F82; color:#FFF6F8; }
-.accent-btn:hover:not(:disabled) { background:#E85A70; }
-.ghost-btn { background:#F0BFC9; color:#8C3A4D; }
-.ghost-btn:hover:not(:disabled) { background:#EAAAB8; }
-pre { margin:0; padding:12px 14px; background:#FFF6F8; border:1px solid #F3D3D9; border-radius:10px;
+.accent-btn { background:var(--accent); color:var(--on-accent); }
+.accent-btn:hover:not(:disabled) { background:var(--accent-hover); }
+.ghost-btn { background:var(--hover-pink); color:var(--accent-dark); }
+.ghost-btn:hover:not(:disabled) { background:var(--ghost-hover); }
+pre { margin:0; padding:12px 14px; background:var(--surface-softer); border:1px solid var(--input-border); border-radius:10px;
       font-family:Consolas,'Cascadia Mono',monospace; font-size:12.5px; line-height:1.5;
       max-height:340px; overflow:auto; white-space:pre-wrap; word-break:break-word; min-height:60px; }
-pre:empty::before { content:'Output will appear here.'; color:#8C6570; }
+pre:empty::before { content:'Output will appear here.'; color:var(--text-muted); }
 [hidden] { display:none !important; }
 </style></head><body>
 <div class='logo'>%%LOGO%%<span>SysInfo</span></div>

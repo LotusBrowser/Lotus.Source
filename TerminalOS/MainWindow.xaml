@@ -7,7 +7,7 @@
         xmlns:local="clr-namespace:TerminalOS"
         mc:Ignorable="d"
         Title="Lotus" Height="700" Width="1200" MinWidth="480" MinHeight="320"
-        Background="#FDECEF"
+        Background="{DynamicResource FrameBrush}"
         WindowStyle="None"
         ResizeMode="CanResize"
         FontFamily="Segoe UI">
@@ -24,26 +24,9 @@
 
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
 
-        <!-- ===================== Theme brushes =====================
-             Single shared brush instances: toggling dark mode mutates each
-             brush's Color in code-behind, which repaints every element that
-             references it (no resource re-lookup needed). -->
-        <SolidColorBrush x:Key="FrameBrush" Color="#FDECEF"/>
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#F0BFC9"/>
-        <SolidColorBrush x:Key="SurfaceBrushSecondary" Color="#F6D9DF"/>
-        <SolidColorBrush x:Key="SurfaceSoftBrush" Color="#FDECEF"/>
-        <SolidColorBrush x:Key="SurfaceSofterBrush" Color="#FFF6F8"/>
-        <SolidColorBrush x:Key="BorderSoftBrush" Color="#FDECEF"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#3A1F27"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#5C3944"/>
-        <SolidColorBrush x:Key="TextMutedBrush" Color="#8C6570"/>
-        <SolidColorBrush x:Key="TextFaintBrush" Color="#C99AA6"/>
-        <SolidColorBrush x:Key="TextDisabledBrush" Color="#E3B8C2"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#FF6F82"/>
-        <SolidColorBrush x:Key="AccentDarkBrush" Color="#8C3A4D"/>
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#E85A70"/>
-        <SolidColorBrush x:Key="HoverSoftBrush" Color="#FBE4E9"/>
-        <SolidColorBrush x:Key="HoverPinkBrush" Color="#F0BFC9"/>
+        <!-- Theme colors/brushes live in Theme.xaml (merged in App.xaml) and are swapped
+             at runtime by ThemeManager. Always reference them with {DynamicResource}
+             so the UI repaints when the theme changes. -->
 
         <!-- ===================== Vector icons (SVG-style path data) ===================== -->
         <!-- These use the same path mini-language as SVG "d" attributes, so they render as
@@ -156,7 +139,7 @@
                                             <!-- Fallback globe icon (page has no favicon) -->
                                             <Path x:Name="FavIcon" Style="{StaticResource VectorIcon}"
                                                   Data="{StaticResource IconGlobe}"
-                                                  Width="13" Height="13" Stroke="{StaticResource TextFaintBrush}" StrokeThickness="1.3"
+                                                  Width="13" Height="13" Stroke="{DynamicResource TextFaintBrush}" StrokeThickness="1.3"
                                                   Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.ShowFallbackDot, Converter={StaticResource BoolToVis}}"/>
 
                                             <!-- Lotus loading spinner. A ¾-circle arc drawn in the accent
@@ -168,7 +151,7 @@
                                                   Data="{StaticResource IconLotusSpinner}"
                                                   Stretch="Uniform"
                                                   Width="14" Height="14"
-                                                  Stroke="{StaticResource AccentBrush}"
+                                                  Stroke="{DynamicResource AccentBrush}"
                                                   StrokeThickness="1.6"
                                                   StrokeStartLineCap="Round"
                                                   StrokeEndLineCap="Round"
@@ -197,7 +180,7 @@
 
                                         <TextBlock Grid.Column="1"
                                                    Text="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Header.Title}"
-                                                   Foreground="{StaticResource TextMutedBrush}"
+                                                   Foreground="{DynamicResource TextMutedBrush}"
                                                    FontSize="12.5"
                                                    TextTrimming="CharacterEllipsis"
                                                    VerticalAlignment="Center"
@@ -211,12 +194,12 @@
                                                 Padding="0"
                                                 Background="Transparent"
                                                 BorderThickness="0"
-                                                Foreground="{StaticResource TextMutedBrush}"
+                                                Foreground="{DynamicResource TextMutedBrush}"
                                                 Cursor="Hand"
                                                 Tag="{Binding RelativeSource={RelativeSource TemplatedParent}}"
                                                 Click="CloseTab_Click">
                                             <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconClose}"
-                                                  Width="9" Height="9" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.6"/>
+                                                  Width="9" Height="9" Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.6"/>
                                             <Button.Template>
                                                 <ControlTemplate TargetType="Button">
                                                     <Border CornerRadius="10" Background="{TemplateBinding Background}">
@@ -224,7 +207,7 @@
                                                     </Border>
                                                     <ControlTemplate.Triggers>
                                                         <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter Property="Background" Value="{StaticResource HoverPinkBrush}"/>
+                                                            <Setter Property="Background" Value="{DynamicResource HoverPinkBrush}"/>
                                                         </Trigger>
                                                     </ControlTemplate.Triggers>
                                                 </ControlTemplate>
@@ -236,10 +219,10 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{StaticResource FrameBrush}"/>
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource FrameBrush}"/>
                             </Trigger>
                             <Trigger Property="IsSelected" Value="False">
-                                <Setter TargetName="Border" Property="Background" Value="#F0BFC9"/>
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource TabInactiveBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -253,7 +236,7 @@
             <Setter Property="Height" Value="30"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -264,10 +247,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverSoftBrush}"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource HoverSoftBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="{StaticResource TextDisabledBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -278,7 +261,7 @@
         <Style x:Key="PillButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="10,7"/>
@@ -291,7 +274,29 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource SurfaceSoftBrush}"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource SurfaceSoftBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="6,0">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverSoftBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverPinkBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -300,7 +305,7 @@
         </Style>
 
         <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="FontSize" Value="12.5"/>
         </Style>
 
@@ -310,7 +315,7 @@
             <Setter Property="Height" Value="40"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Foreground" Value="{StaticResource AccentDarkBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentDarkBrush}"/>
             <Setter Property="Cursor" Value="Arrow"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -320,7 +325,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource HoverPinkBrush}"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource HoverPinkBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -337,8 +342,8 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="#E81123"/>
-                                <Setter Property="Foreground" Value="#F0BFC9"/>
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource CloseHoverBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource CloseHoverForegroundBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -351,7 +356,7 @@
     <DockPanel LastChildFill="True">
 
         <!-- ===================== Title bar + tab strip (Edge-style single row) ===================== -->
-        <Border x:Name="TitleBar" DockPanel.Dock="Top" Height="40" Background="{StaticResource SurfaceBrush}"
+        <Border x:Name="TitleBar" DockPanel.Dock="Top" Height="40" Background="{DynamicResource SurfaceBrush}"
                 SizeChanged="TitleBar_SizeChanged">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -367,14 +372,14 @@
                 <Viewbox Grid.Column="0" Width="16" Height="16" Margin="10,0,6,0"
                          VerticalAlignment="Center" IsHitTestVisible="False">
                     <Canvas Width="512" Height="512">
-                        <Path Data="{StaticResource LotusPetalBottom}" Fill="#FF828C"/>
-                        <Path Data="{StaticResource LotusPetalWide}" Fill="#FF96A0"/>
-                        <Path Data="{StaticResource LotusPetalTop}" Fill="#FFA6B1"/>
-                        <Path Data="{StaticResource LotusPetalLeft}" Fill="#FFA6B1"/>
-                        <Path Data="{StaticResource LotusPetalRight}" Fill="#FFA6B1"/>
-                        <Path Data="{StaticResource LotusPetalLeftInner}" Fill="#FF96A0"/>
-                        <Path Data="{StaticResource LotusPetalRightInner}" Fill="#FF96A0"/>
-                        <Path Data="{StaticResource LotusPetalCenter}" Fill="#FF828C"/>
+                        <Path Data="{StaticResource LotusPetalBottom}" Fill="{DynamicResource LogoDeepBrush}"/>
+                        <Path Data="{StaticResource LotusPetalWide}" Fill="{DynamicResource LogoMidBrush}"/>
+                        <Path Data="{StaticResource LotusPetalTop}" Fill="{DynamicResource LogoLightBrush}"/>
+                        <Path Data="{StaticResource LotusPetalLeft}" Fill="{DynamicResource LogoLightBrush}"/>
+                        <Path Data="{StaticResource LotusPetalRight}" Fill="{DynamicResource LogoLightBrush}"/>
+                        <Path Data="{StaticResource LotusPetalLeftInner}" Fill="{DynamicResource LogoMidBrush}"/>
+                        <Path Data="{StaticResource LotusPetalRightInner}" Fill="{DynamicResource LogoMidBrush}"/>
+                        <Path Data="{StaticResource LotusPetalCenter}" Fill="{DynamicResource LogoDeepBrush}"/>
                     </Canvas>
                 </Viewbox>
 
@@ -434,7 +439,7 @@
         </Border>
 
         <!-- ===================== Navigation toolbar ===================== -->
-        <Border DockPanel.Dock="Top" Background="{StaticResource FrameBrush}" Padding="10,8" BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource FrameBrush}" Padding="10,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderSoftBrush}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -463,14 +468,14 @@
                 </Button>
 
                 <!-- Omnibox -->
-                <Border Grid.Column="5" Background="{StaticResource SurfaceBrushSecondary}" CornerRadius="18" Padding="14,0" Height="36"
-                        BorderThickness="1" BorderBrush="{StaticResource SurfaceSoftBrush}">
+                <Border Grid.Column="5" Background="{DynamicResource SurfaceSecondaryBrush}" CornerRadius="18" Padding="14,0" Height="36"
+                        BorderThickness="1" BorderBrush="{DynamicResource SurfaceSoftBrush}">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True">
-                                    <Setter Property="Background" Value="#F0BFC9"/>
-                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                    <Setter Property="Background" Value="{DynamicResource OmniboxFocusBrush}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -478,19 +483,19 @@
                     <DockPanel VerticalAlignment="Center">
                         <Path x:Name="SecurityIcon" DockPanel.Dock="Left"
                               Style="{StaticResource VectorIcon}" Data="{StaticResource IconLock}"
-                              Width="13" Height="13" Stroke="#1E8E3E" StrokeThickness="1.6"
+                              Width="13" Height="13" Stroke="{DynamicResource SecureBrush}" StrokeThickness="1.6"
                               VerticalAlignment="Center" Margin="0,0,10,0"
                               ToolTip="Connection is secure"/>
                         <Path x:Name="BookmarkStar" DockPanel.Dock="Right"
                               Style="{StaticResource VectorIcon}" Data="{StaticResource IconStar}"
-                              Width="15" Height="15" Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.6" Fill="Transparent"
+                              Width="15" Height="15" Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.6" Fill="Transparent"
                               VerticalAlignment="Center" Margin="8,0,0,0"
                               Cursor="Hand" ToolTip="Bookmark this page (Ctrl+D)"
                               MouseLeftButtonUp="BookmarkStar_Click"/>
                         <TextBox x:Name="AddressBar"
                                  Background="Transparent"
-                                 Foreground="{StaticResource TextPrimaryBrush}"
-                                 CaretBrush="{StaticResource TextPrimaryBrush}"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 CaretBrush="{DynamicResource TextPrimaryBrush}"
                                  BorderThickness="0"
                                  VerticalContentAlignment="Center"
                                  FontSize="13.5"
@@ -502,8 +507,8 @@
         </Border>
 
         <!-- ===================== Bookmarks bar ===================== -->
-        <Border x:Name="BookmarksBar" DockPanel.Dock="Top" Background="{StaticResource FrameBrush}" Padding="8,4"
-                BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}" Visibility="Collapsed">
+        <Border x:Name="BookmarksBar" DockPanel.Dock="Top" Background="{DynamicResource FrameBrush}" Padding="8,4"
+                BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderSoftBrush}" Visibility="Collapsed">
             <ItemsControl x:Name="BookmarksList">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -522,34 +527,38 @@
         </Border>
 
         <!-- ===================== Find in page bar ===================== -->
-        <Border x:Name="FindBar" DockPanel.Dock="Top" Background="#5C3944" Padding="10,6" Visibility="Collapsed">
+        <Border x:Name="FindBar" DockPanel.Dock="Top" Background="{DynamicResource FindBarBrush}" Padding="10,6" Visibility="Collapsed">
             <StackPanel Orientation="Horizontal">
                 <TextBox x:Name="FindBox" Width="220" Height="26" VerticalContentAlignment="Center"
-                         Padding="6,0" KeyDown="FindBox_KeyDown" TextChanged="FindBox_TextChanged"/>
+                         Padding="6,0" KeyDown="FindBox_KeyDown" TextChanged="FindBox_TextChanged"
+                         Background="{DynamicResource SurfaceSofterBrush}"
+                         Foreground="{DynamicResource TextPrimaryBrush}"
+                         CaretBrush="{DynamicResource TextPrimaryBrush}"
+                         BorderBrush="{DynamicResource InputBorderBrush}"/>
                 <Button Width="26" Height="26" Margin="6,0,0,0" Click="FindPrev_Click"
-                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                        Background="Transparent" Foreground="{DynamicResource FindBarForegroundBrush}" BorderThickness="0" Cursor="Hand">
                     <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconChevronUp}"
-                          Width="14" Height="14" Stroke="#F0BFC9"/>
+                          Width="14" Height="14" Stroke="{DynamicResource FindBarForegroundBrush}"/>
                 </Button>
                 <Button Width="26" Height="26" Click="FindNext_Click"
-                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                        Background="Transparent" Foreground="{DynamicResource FindBarForegroundBrush}" BorderThickness="0" Cursor="Hand">
                     <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconChevronDown}"
-                          Width="14" Height="14" Stroke="#F0BFC9"/>
+                          Width="14" Height="14" Stroke="{DynamicResource FindBarForegroundBrush}"/>
                 </Button>
                 <Button Width="26" Height="26" Margin="10,0,0,0" Click="FindClose_Click"
-                        Background="Transparent" Foreground="#F0BFC9" BorderThickness="0" Cursor="Hand">
+                        Background="Transparent" Foreground="{DynamicResource FindBarForegroundBrush}" BorderThickness="0" Cursor="Hand">
                     <Path Style="{StaticResource VectorIcon}" Data="{StaticResource IconClose}"
-                          Width="12" Height="12" Stroke="#F0BFC9"/>
+                          Width="12" Height="12" Stroke="{DynamicResource FindBarForegroundBrush}"/>
                 </Button>
             </StackPanel>
         </Border>
 
         <!-- ===================== History panel ===================== -->
-        <Border x:Name="HistoryPanel" DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
-                Visibility="Collapsed" Padding="16" BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderSoftBrush}" MaxHeight="320">
+        <Border x:Name="HistoryPanel" DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                Visibility="Collapsed" Padding="16" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource BorderSoftBrush}" MaxHeight="320">
             <DockPanel>
                 <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
-                    <TextBlock Text="History" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" FontSize="14"/>
+                    <TextBlock Text="History" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold" FontSize="14"/>
                     <Button Content="Clear all history" HorizontalAlignment="Right" Style="{StaticResource PillButton}"
                             FontSize="11.5" Click="ClearHistory_Click"/>
                 </Grid>
@@ -558,9 +567,9 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal" Margin="0,4">
-                                <TextBlock Text="{Binding VisitedAt, StringFormat='HH:mm'}" Foreground="{StaticResource TextFaintBrush}" Width="50" FontSize="11.5"/>
-                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource TextPrimaryBrush}" FontSize="12.5" Width="260" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="{Binding Url}" Foreground="{StaticResource TextMutedBrush}" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding VisitedAt, StringFormat='HH:mm'}" Foreground="{DynamicResource TextFaintBrush}" Width="50" FontSize="11.5"/>
+                                <TextBlock Text="{Binding Title}" Foreground="{DynamicResource TextPrimaryBrush}" FontSize="12.5" Width="260" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding Url}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -569,8 +578,8 @@
         </Border>
 
         <!-- ===================== Download shelf (Chrome-style bottom bar) ===================== -->
-        <Border x:Name="DownloadShelf" DockPanel.Dock="Bottom" Background="{StaticResource FrameBrush}"
-                BorderThickness="0,1,0,0" BorderBrush="{StaticResource BorderSoftBrush}" Padding="8" Visibility="Collapsed">
+        <Border x:Name="DownloadShelf" DockPanel.Dock="Bottom" Background="{DynamicResource FrameBrush}"
+                BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSoftBrush}" Padding="8" Visibility="Collapsed">
             <ItemsControl x:Name="DownloadsList" ItemsSource="{Binding Downloads}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -579,12 +588,15 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Border Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,8,0" Width="220" Cursor="Hand"
+                        <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="10,6" Margin="0,0,8,0" Width="220" Cursor="Hand"
                                 MouseLeftButtonUp="DownloadItem_Click" Tag="{Binding}">
                             <StackPanel>
-                                <TextBlock Text="{Binding FileName}" FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="{Binding StatusText}" FontSize="10.5" Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,4"/>
+                                <TextBlock Text="{Binding FileName}" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding StatusText}" FontSize="10.5" Foreground="{DynamicResource TextMutedBrush}" Margin="0,2,0,4"/>
                                 <ProgressBar Height="3" Minimum="0" Maximum="100" Value="{Binding Progress, Mode=OneWay}"
+                                             Foreground="{DynamicResource AccentBrush}"
+                                             Background="{DynamicResource HoverPinkBrush}"
+                                             BorderThickness="0"
                                              Visibility="{Binding IsInProgress, Converter={StaticResource BoolToVis}}"/>
                             </StackPanel>
                         </Border>
@@ -598,7 +610,7 @@
              show through, framing the page. CornerRadius rounds that frame, and
              the thin side border traces it - all independent of the outer window
              shape, which stays square (see WindowChrome CornerRadius="0" above). -->
-        <Border Margin="5,5,5,5" CornerRadius="8" ClipToBounds="True" Background="#F6D9DF">
+        <Border Margin="5,5,5,5" CornerRadius="8" ClipToBounds="True" Background="{DynamicResource SurfaceSecondaryBrush}">
             <Grid x:Name="ContentHost" Background="Transparent"/>
         </Border>
 

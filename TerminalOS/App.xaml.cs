@@ -31,6 +31,10 @@ namespace TerminalOS
                 return;
             }
 
+            // Load the saved theme (Lotus Light / Lotus Dark / Custom) before any
+            // window exists, so the first frame already has the right colors.
+            ThemeManager.Initialize();
+
             var mainWindow = new MainWindow(startupUrl);
 
             // Any later launch (another link click while Lotus is already

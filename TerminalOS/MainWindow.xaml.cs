@@ -77,6 +77,7 @@ namespace TerminalOS
             Loaded += async (s, e) => await InitializeAsync();
             PreviewKeyDown += Window_PreviewKeyDown;
             StateChanged += (s, e) => UpdateMaximizeRestoreIcon();
+            ThemeManager.ThemeChanged += OnThemeChanged;
 
             // Best-effort, cheap, and self-healing (re-writes the registered
             // exe path every launch) - see DefaultBrowserRegistrar for why this
@@ -96,6 +97,47 @@ namespace TerminalOS
             Activate();
 
             await AddNewTab(url);
+        }
+
+        // ================================================================
+        // Theming
+        // ================================================================
+
+        // The WPF chrome repaints by itself (everything is a {DynamicResource}); this
+        // handles the pieces that don't: code-set brushes, open lotus:// pages, and
+        // the color scheme that websites see.
+        private void OnThemeChanged()
+        {
+            UpdateBookmarkStar();
+            UpdateSecurityIcon(CurrentBrowser);
+            ApplyBrowserColorScheme();
+
+            // Live-update open lotus:// pages (no reload, so SysInfo keeps its output).
+            string script = ThemeManager.BuildApplyScript();
+            foreach (var browser in _browsers.Values)
+            {
+                var core = browser.CoreWebView2;
+                if (core?.Source != null &&
+                    core.Source.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = core.ExecuteScriptAsync(script);
+                }
+            }
+        }
+
+        // Lets sites that support prefers-color-scheme follow the theme. Lotus Light
+        // keeps the old behavior (follow Windows); dark themes ask for dark pages.
+        private void ApplyBrowserColorScheme()
+        {
+            var scheme = ThemeManager.Current == LotusTheme.Light
+                ? CoreWebView2PreferredColorScheme.Auto
+                : (ThemeManager.IsDark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light);
+
+            foreach (var browser in _browsers.Values)
+            {
+                var profile = browser.CoreWebView2?.Profile;
+                if (profile != null) profile.PreferredColorScheme = scheme;
+            }
         }
 
         // ================================================================
@@ -369,6 +411,7 @@ namespace TerminalOS
             // before a page's own CSS background paints over it. Making it transparent
             // lets the page's own background - including dark themes - be what's shown.
             browser.DefaultBackgroundColor = System.Drawing.Color.Transparent;
+            ApplyBrowserColorScheme();
 
             ConfigureSecurity(browser, tab, header);
 
@@ -814,19 +857,28 @@ namespace TerminalOS
         // the same GetFaviconAsync pipeline that every other site's icon goes through.
         // Fills are expressed as rgb() rather than hex so the '#' character never has to
         // survive being embedded in a data: URI (a literal '#' would truncate the URL).
-        private static string LotusSvg(int size) => $@"<svg width='{size}' height='{size}' viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'>
-                <path style='fill:rgb(255,130,140);' d='M189.37,375.172c-2.521,5.258-3.991,10.68-3.991,16.26c0,25.565,27.584,48.348,70.621,63.188c43.037-14.84,70.621-37.623,70.621-63.188c0-5.4-1.389-10.651-3.756-15.75l-66.869-35.821L189.37,375.172z'/>
-                <path style='fill:rgb(255,150,160);' d='M384,286.897H128c-51.787,0-97.939,11.86-128,44.138C30.061,363.311,76.213,384,128,384s97.939-11.861,128-44.138C286.061,372.139,332.213,384,384,384s97.939-20.689,128-52.966C481.94,298.756,435.788,286.897,384,286.897z'/>
-                <path style='fill:rgb(255,166,177);' d='M256,57.379c-37.657,33.171-61.793,84.096-61.793,141.241c0,13.591,1.405,26.815,3.993,39.548h115.601c2.588-12.733,3.992-25.955,3.992-39.548C317.793,141.476,293.657,90.55,256,57.379z'/>
-                <path style='fill:rgb(255,166,177);' d='M194.207,216.276c-39.988-32.025-95.218-53.686-141.213-52.941c-0.905,42.244,19.834,87.86,60.902,123.57S207.42,340.651,256,339.864'/>
-                <path style='fill:rgb(255,166,177);' d='M256,339.864c48.58,0.787,101.037-17.248,142.104-52.959s61.806-81.325,60.902-123.57c-45.364-0.735-101.518,21.783-141.213,52.94'/>
-                <path style='fill:rgb(255,150,160);' d='M105.952,216.294c-0.669,29.572,14.66,61.505,45.014,86.505c30.354,24.999,69.127,37.624,105.034,37.074l-52.965-88.286C173.479,229.166,139.948,215.772,105.952,216.294z'/>
-                <path style='fill:rgb(255,150,160);' d='M308.966,251.586L256,339.871c35.907,0.552,74.68-12.074,105.034-37.074c30.354-24.999,45.683-56.931,45.014-86.505C372.519,215.779,338.305,229.775,308.966,251.586z'/>
-                <path style='fill:rgb(255,130,140);' d='M194.207,260.414c0,32.143,24.136,60.79,61.793,79.448c37.657-18.658,61.793-47.305,61.793-79.448s-24.136-60.79-61.793-79.448C218.343,199.624,194.207,228.27,194.207,260.414z'/>
+        private static string LotusSvg(int size, bool cssVars = true)
+        {
+            // On-page logos use the theme CSS variables so they recolor live. The favicon
+            // can't (it's a standalone data: URI), so it gets the current theme's rgb() values.
+            string deep = cssVars ? "var(--logo-deep)" : ThemeManager.Rgb("LogoDeep");
+            string mid = cssVars ? "var(--logo-mid)" : ThemeManager.Rgb("LogoMid");
+            string light = cssVars ? "var(--logo-light)" : ThemeManager.Rgb("LogoLight");
+
+            return $@"<svg width='{size}' height='{size}' viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'>
+                <path style='fill:{deep};' d='M189.37,375.172c-2.521,5.258-3.991,10.68-3.991,16.26c0,25.565,27.584,48.348,70.621,63.188c43.037-14.84,70.621-37.623,70.621-63.188c0-5.4-1.389-10.651-3.756-15.75l-66.869-35.821L189.37,375.172z'/>
+                <path style='fill:{mid};' d='M384,286.897H128c-51.787,0-97.939,11.86-128,44.138C30.061,363.311,76.213,384,128,384s97.939-11.861,128-44.138C286.061,372.139,332.213,384,384,384s97.939-20.689,128-52.966C481.94,298.756,435.788,286.897,384,286.897z'/>
+                <path style='fill:{light};' d='M256,57.379c-37.657,33.171-61.793,84.096-61.793,141.241c0,13.591,1.405,26.815,3.993,39.548h115.601c2.588-12.733,3.992-25.955,3.992-39.548C317.793,141.476,293.657,90.55,256,57.379z'/>
+                <path style='fill:{light};' d='M194.207,216.276c-39.988-32.025-95.218-53.686-141.213-52.941c-0.905,42.244,19.834,87.86,60.902,123.57S207.42,340.651,256,339.864'/>
+                <path style='fill:{light};' d='M256,339.864c48.58,0.787,101.037-17.248,142.104-52.959s61.806-81.325,60.902-123.57c-45.364-0.735-101.518,21.783-141.213,52.94'/>
+                <path style='fill:{mid};' d='M105.952,216.294c-0.669,29.572,14.66,61.505,45.014,86.505c30.354,24.999,69.127,37.624,105.034,37.074l-52.965-88.286C173.479,229.166,139.948,215.772,105.952,216.294z'/>
+                <path style='fill:{mid};' d='M308.966,251.586L256,339.871c35.907,0.552,74.68-12.074,105.034-37.074c30.354-24.999,45.683-56.931,45.014-86.505C372.519,215.779,338.305,229.775,308.966,251.586z'/>
+                <path style='fill:{deep};' d='M194.207,260.414c0,32.143,24.136,60.79,61.793,79.448c37.657-18.658,61.793-47.305,61.793-79.448s-24.136-60.79-61.793-79.448C218.343,199.624,194.207,228.27,194.207,260.414z'/>
             </svg>";
+        }
 
         private static string LotusFaviconDataUri() => string.Join(" ",
-            LotusSvg(64).Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+            LotusSvg(64, cssVars: false).Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries));
 
         private string BuildNewTabPageHtml()
         {
@@ -836,27 +888,30 @@ namespace TerminalOS
 
             return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>New Tab</title>
                 <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
+                <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
                 <style>
-                body {{ background:#F6D9DF; font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
+                body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
                         align-items:center; padding-top:110px; margin:0; }}
                 .logo {{ display:flex; align-items:center; gap:14px; margin-bottom:32px; }}
-                .logo span {{ font-size:42px; font-weight:600; color:#8C3A4D; letter-spacing:.5px; }}
+                .logo span {{ font-size:42px; font-weight:600; color:var(--accent-dark); letter-spacing:.5px; }}
                 form {{ width:480px; }}
-                input {{ width:100%; height:44px; border-radius:22px; border:1px solid #F3D3D9;
-                         padding:0 20px; font-size:15px; outline:none; box-shadow:0 1px 4px rgba(140,56,77,.12); background:#FBE4E9;}}
+                input {{ width:100%; height:44px; border-radius:22px; border:1px solid var(--input-border);
+                         padding:0 20px; font-size:15px; outline:none; box-shadow:0 1px 4px var(--shadow);
+                         background:var(--hover-soft); color:var(--text-primary); }}
                 .tiles {{ display:flex; gap:20px; margin-top:48px; flex-wrap:wrap; justify-content:center; max-width:520px; }}
                 .tile {{ display:flex; flex-direction:column; align-items:center; text-decoration:none; width:64px; }}
-                .dot {{ width:40px; height:40px; border-radius:50%; background:#F0BFC9; margin-bottom:6px; }}
-                .tile span {{ font-size:11px; color:#5C3944; text-align:center; white-space:nowrap;
+                .dot {{ width:40px; height:40px; border-radius:50%; background:var(--hover-pink); margin-bottom:6px; }}
+                .tile span {{ font-size:11px; color:var(--text-secondary); text-align:center; white-space:nowrap;
                               overflow:hidden; text-overflow:ellipsis; width:64px; }}
                 .settings-btn {{ position:fixed; top:18px; right:18px; width:38px; height:38px; border-radius:50%;
                                   display:flex; align-items:center; justify-content:center;
-                                  background:#FBE4E9; box-shadow:0 1px 4px rgba(140,56,77,.12);
+                                  background:var(--hover-soft); box-shadow:0 1px 4px var(--shadow);
                                   text-decoration:none; }}
-                .settings-btn:hover {{ background:#F0BFC9; }}
+                .settings-btn:hover {{ background:var(--hover-pink); }}
+                .settings-btn svg {{ stroke:var(--accent-dark); }}
                 </style></head><body>
                 <a class='settings-btn' href='{SettingsUrl}' title='Settings'>
-                    <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='#8C3A4D' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>
+                    <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>
                         <circle cx='12' cy='12' r='3'></circle>
                         <path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'></path>
                     </svg>
@@ -882,6 +937,17 @@ namespace TerminalOS
                            onchange=""post('{action}', this.checked)"">
                 </label>";
 
+            string ThemeOption(LotusTheme theme, string label)
+            {
+                string key = ThemeManager.KeyOf(theme);
+                return $@"
+                <label class='toggle-row'>
+                    <span>{label}</span>
+                    <input type='radio' name='theme' value='{key}' {(ThemeManager.Current == theme ? "checked" : "")}
+                           onchange=""post('setTheme', true, '{key}')"">
+                </label>";
+            }
+
             bool showBookmarksBar = BookmarksBar.Visibility == Visibility.Visible;
             bool isDefaultBrowser = DefaultBrowserRegistrar.IsCurrentDefault();
 
@@ -892,26 +958,42 @@ namespace TerminalOS
 
             return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Settings</title>
                 <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
+                <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
                 <style>
-                body {{ background:#F6D9DF; font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
-                        align-items:center; padding:70px 20px 60px; margin:0; }}
+                body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
+                        align-items:center; padding:70px 20px 60px; margin:0; color:var(--text-primary); }}
                 .logo {{ display:flex; align-items:center; gap:14px; margin-bottom:36px; }}
-                .logo span {{ font-size:32px; font-weight:600; color:#8C3A4D; letter-spacing:.5px; }}
+                .logo span {{ font-size:32px; font-weight:600; color:var(--accent-dark); letter-spacing:.5px; }}
                 .page {{ width:100%; max-width:520px; }}
-                .card {{ background:#FBE4E9; border-radius:14px; padding:20px 22px; margin-bottom:20px;
-                         box-shadow:0 1px 4px rgba(140,56,77,.12); }}
-                .card h2 {{ margin:0 0 14px; font-size:14px; font-weight:600; color:#8C3A4D;
+                .card {{ background:var(--hover-soft); border-radius:14px; padding:20px 22px; margin-bottom:20px;
+                         box-shadow:0 1px 4px var(--shadow); }}
+                .card h2 {{ margin:0 0 14px; font-size:14px; font-weight:600; color:var(--accent-dark);
                             text-transform:uppercase; letter-spacing:.5px; }}
                 .toggle-row {{ display:flex; align-items:center; justify-content:space-between;
-                               padding:9px 0; font-size:14px; color:#3A1F27; cursor:pointer; }}
-                .toggle-row input {{ accent-color:#FF6F82; width:18px; height:18px; cursor:pointer; }}
-                .muted {{ font-size:12.5px; color:#8C6570; margin:2px 0 14px; }}
+                               padding:9px 0; font-size:14px; color:var(--text-primary); cursor:pointer; }}
+                .toggle-row input[type=checkbox], .toggle-row input[type=radio] {{ accent-color:var(--accent); width:18px; height:18px; cursor:pointer; }}
+                .color-input {{ width:46px; height:28px; padding:0; border:1px solid var(--input-border); border-radius:8px;
+                                background:var(--surface-softer); cursor:pointer; }}
+                .muted {{ font-size:12.5px; color:var(--text-muted); margin:2px 0 14px; }}
                 .accent-btn {{ font-family:inherit; font-size:13px; border:none; border-radius:18px;
-                               padding:9px 18px; background:#FF6F82; color:#FFF6F8; cursor:pointer; }}
-                .accent-btn:hover {{ background:#E85A70; }}
+                               padding:9px 18px; background:var(--accent); color:var(--on-accent); cursor:pointer; }}
+                .accent-btn:hover {{ background:var(--accent-hover); }}
                 </style></head><body>
                 <div class='logo'>{LotusSvg(40)}<span>Settings</span></div>
                 <div class='page'>
+
+                    <div class='card'>
+                        <h2>Appearance</h2>
+                        {ThemeOption(LotusTheme.Light, "Lotus Light")}
+                        {ThemeOption(LotusTheme.Dark, "Lotus Dark")}
+                        {ThemeOption(LotusTheme.Custom, "Custom")}
+                        <div class='toggle-row' style='cursor:default;'>
+                            <span>Custom color</span>
+                            <input type='color' id='customColor' class='color-input' value='{ThemeManager.CustomColorHex}'
+                                   oninput=""pickColor(this.value, false)"" onchange=""pickColor(this.value, true)"">
+                        </div>
+                        <p class='muted' style='margin-bottom:0;'>Pick a color and Lotus builds a matching theme around it. Dark colors give a dark theme.</p>
+                    </div>
 
                     <div class='card'>
                         <h2>Browsing</h2>
@@ -934,8 +1016,29 @@ namespace TerminalOS
 
                 </div>
                 <script>
-                function post(action, value) {{
-                    window.chrome.webview.postMessage(JSON.stringify({{ action: action, value: !!value }}));
+                function post(action, value, text) {{
+                    window.chrome.webview.postMessage(JSON.stringify({{
+                        action: action, value: !!value, text: text === undefined ? null : String(text)
+                    }}));
+                }}
+
+                // Live-preview the custom theme while the picker is open, throttled so we
+                // don't rebuild the whole palette on every mouse move.
+                var colorTimer = null, lastColor = null;
+                function pickColor(value, isFinal) {{
+                    lastColor = value;
+                    var radio = document.querySelector('input[name=theme][value=custom]');
+                    if (radio) radio.checked = true;
+                    if (isFinal) {{
+                        clearTimeout(colorTimer); colorTimer = null;
+                        post('setCustomColor', true, value);
+                        return;
+                    }}
+                    if (colorTimer) return;
+                    colorTimer = setTimeout(function () {{
+                        colorTimer = null;
+                        post('setCustomColor', true, lastColor);
+                    }}, 90);
                 }}
                 </script>
                 </body></html>";
@@ -957,9 +1060,11 @@ namespace TerminalOS
         {
             var url = CurrentBrowser?.CoreWebView2?.Source;
             bool marked = IsBookmarked(url);
-            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(marked ? "#FF6F82" : "#8C6570"));
-            BookmarkStar.Stroke = brush;
-            BookmarkStar.Fill = marked ? brush : Brushes.Transparent;
+            // Resource references (not fixed brushes) so the star follows theme changes.
+            string brushKey = marked ? "AccentBrush" : "TextMutedBrush";
+            BookmarkStar.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, brushKey);
+            if (marked) BookmarkStar.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, brushKey);
+            else BookmarkStar.Fill = Brushes.Transparent;
         }
 
         private void ToggleBookmarkCurrent()
@@ -1154,6 +1259,7 @@ namespace TerminalOS
         {
             public string Action { get; set; }
             public bool Value { get; set; }
+            public string Text { get; set; }
         }
 
         private void HandleSettingsPageMessage(string rawJson)
@@ -1177,6 +1283,13 @@ namespace TerminalOS
                 case "setPopupBlock": _popupBlockEnabled = msg.Value; break;
                 case "setShowBookmarksBar": SetShowBookmarksBar(msg.Value); break;
                 case "clearBrowsingData": _ = ClearBrowsingDataAsync(); break;
+                case "setTheme":
+                    if (ThemeManager.TryParseKey(msg.Text, out var requestedTheme))
+                    {
+                        ThemeManager.SetTheme(requestedTheme);
+                    }
+                    break;
+                case "setCustomColor": ThemeManager.SetCustomColor(msg.Text); break;
                 case "setDefaultBrowser":
                     // Registration already ran at construction time, so Lotus is
                     // guaranteed to be in the list Windows shows here. Windows itself
@@ -1295,9 +1408,8 @@ namespace TerminalOS
             bool secure = source.StartsWith("https://") || string.IsNullOrEmpty(source) ||
                 source.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase);
             SecurityIcon.Data = (Geometry)FindResource(secure ? "IconLock" : "IconWarning");
-            SecurityIcon.Stroke = secure
-                ? (Brush)new BrushConverter().ConvertFrom("#1E8E3E")
-                : (Brush)new BrushConverter().ConvertFrom("#D93025");
+            SecurityIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty,
+                secure ? "SecureBrush" : "InsecureBrush");
             SecurityIcon.ToolTip = secure ? "Connection is secure" : "Connection is not secure";
         }
     }

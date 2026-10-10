@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Condition="'$(Configuration)' == 'Release' And '$(LOTUS_PUBLISHING)' != '1'" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\build-installer.ps1&quot; -Version &quot;0.3.1&quot;" />
+    <Exec Condition="'$(Configuration)' == 'Release' And '$(LOTUS_PUBLISHING)' != '1'" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\build-installer.ps1&quot; -Version &quot;0.4.0&quot;" />
   </Target>
 
 </Project>

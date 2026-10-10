@@ -1,0 +1,90 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ======================================================================
+         Theme.xaml  -  every color Lotus draws with lives in this file.
+
+         * The <Color> entries below are the "Lotus Light" palette (the default).
+         * "Lotus Dark" is the same set of keys in Theme.Dark.xaml.
+         * "Custom" is generated at runtime from one user-picked color
+           (see ThemeManager.BuildCustomPalette).
+
+         ThemeManager swaps the active palette at runtime by re-writing each
+         <Name>Color and <Name>Brush entry in Application.Resources. Because
+         the window references brushes with {DynamicResource}, the whole UI
+         repaints immediately - no restart, no reload.
+
+         RULE: never hardcode a color in XAML or code-behind. Add a new token
+         here AND in Theme.Dark.xaml AND in ThemeManager.Tokens/BuildCustomPalette.
+         ====================================================================== -->
+
+    <!-- ===================== Colors (Lotus Light) ===================== -->
+    <Color x:Key="FrameColor">#FDECEF</Color>
+    <Color x:Key="SurfaceColor">#F0BFC9</Color>
+    <Color x:Key="SurfaceSecondaryColor">#F6D9DF</Color>
+    <Color x:Key="SurfaceSoftColor">#FDECEF</Color>
+    <Color x:Key="SurfaceSofterColor">#FFF6F8</Color>
+    <Color x:Key="BorderSoftColor">#FDECEF</Color>
+    <Color x:Key="TextPrimaryColor">#3A1F27</Color>
+    <Color x:Key="TextSecondaryColor">#5C3944</Color>
+    <Color x:Key="TextMutedColor">#8C6570</Color>
+    <Color x:Key="TextFaintColor">#C99AA6</Color>
+    <Color x:Key="TextDisabledColor">#E3B8C2</Color>
+    <Color x:Key="AccentColor">#FF6F82</Color>
+    <Color x:Key="AccentDarkColor">#8C3A4D</Color>
+    <Color x:Key="AccentHoverColor">#E85A70</Color>
+    <Color x:Key="HoverSoftColor">#FBE4E9</Color>
+    <Color x:Key="HoverPinkColor">#F0BFC9</Color>
+    <Color x:Key="TabInactiveColor">#F0BFC9</Color>
+    <Color x:Key="OmniboxFocusColor">#F0BFC9</Color>
+    <Color x:Key="FindBarColor">#5C3944</Color>
+    <Color x:Key="FindBarForegroundColor">#F0BFC9</Color>
+    <Color x:Key="CloseHoverColor">#E81123</Color>
+    <Color x:Key="CloseHoverForegroundColor">#F0BFC9</Color>
+    <Color x:Key="SecureColor">#1E8E3E</Color>
+    <Color x:Key="InsecureColor">#D93025</Color>
+    <Color x:Key="ErrorColor">#B3261E</Color>
+    <Color x:Key="OnAccentColor">#FFF6F8</Color>
+    <Color x:Key="InputBorderColor">#F3D3D9</Color>
+    <Color x:Key="GhostHoverColor">#EAAAB8</Color>
+    <Color x:Key="LogoDeepColor">#FF828C</Color>
+    <Color x:Key="LogoMidColor">#FF96A0</Color>
+    <Color x:Key="LogoLightColor">#FFA6B1</Color>
+    <Color x:Key="ShadowColor">#1F8C3A4D</Color>
+
+    <!-- ===================== Brushes ===================== -->
+    <!-- Defaults only; ThemeManager replaces these with fresh brushes of the same keys. -->
+    <SolidColorBrush x:Key="FrameBrush" Color="{StaticResource FrameColor}"/>
+    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}"/>
+    <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="{StaticResource SurfaceSecondaryColor}"/>
+    <SolidColorBrush x:Key="SurfaceSoftBrush" Color="{StaticResource SurfaceSoftColor}"/>
+    <SolidColorBrush x:Key="SurfaceSofterBrush" Color="{StaticResource SurfaceSofterColor}"/>
+    <SolidColorBrush x:Key="BorderSoftBrush" Color="{StaticResource BorderSoftColor}"/>
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
+    <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}"/>
+    <SolidColorBrush x:Key="TextFaintBrush" Color="{StaticResource TextFaintColor}"/>
+    <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource TextDisabledColor}"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}"/>
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="{StaticResource AccentDarkColor}"/>
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}"/>
+    <SolidColorBrush x:Key="HoverSoftBrush" Color="{StaticResource HoverSoftColor}"/>
+    <SolidColorBrush x:Key="HoverPinkBrush" Color="{StaticResource HoverPinkColor}"/>
+    <SolidColorBrush x:Key="TabInactiveBrush" Color="{StaticResource TabInactiveColor}"/>
+    <SolidColorBrush x:Key="OmniboxFocusBrush" Color="{StaticResource OmniboxFocusColor}"/>
+    <SolidColorBrush x:Key="FindBarBrush" Color="{StaticResource FindBarColor}"/>
+    <SolidColorBrush x:Key="FindBarForegroundBrush" Color="{StaticResource FindBarForegroundColor}"/>
+    <SolidColorBrush x:Key="CloseHoverBrush" Color="{StaticResource CloseHoverColor}"/>
+    <SolidColorBrush x:Key="CloseHoverForegroundBrush" Color="{StaticResource CloseHoverForegroundColor}"/>
+    <SolidColorBrush x:Key="SecureBrush" Color="{StaticResource SecureColor}"/>
+    <SolidColorBrush x:Key="InsecureBrush" Color="{StaticResource InsecureColor}"/>
+    <SolidColorBrush x:Key="ErrorBrush" Color="{StaticResource ErrorColor}"/>
+    <SolidColorBrush x:Key="OnAccentBrush" Color="{StaticResource OnAccentColor}"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="{StaticResource InputBorderColor}"/>
+    <SolidColorBrush x:Key="GhostHoverBrush" Color="{StaticResource GhostHoverColor}"/>
+    <SolidColorBrush x:Key="LogoDeepBrush" Color="{StaticResource LogoDeepColor}"/>
+    <SolidColorBrush x:Key="LogoMidBrush" Color="{StaticResource LogoMidColor}"/>
+    <SolidColorBrush x:Key="LogoLightBrush" Color="{StaticResource LogoLightColor}"/>
+    <SolidColorBrush x:Key="ShadowBrush" Color="{StaticResource ShadowColor}"/>
+
+</ResourceDictionary>
