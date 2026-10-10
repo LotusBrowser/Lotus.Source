@@ -924,6 +924,140 @@ namespace TerminalOS
                 </body></html>";
         }
 
+        // ---- Custom color picker (lotus://settings) --------------------------------------
+        // Plain raw strings (no brace escaping) injected into the page. All colors come
+        // from the theme CSS variables; the only literals are the picker's own color-model
+        // gradients (white/black/hue rainbow), which must stay fixed.
+        private const string ColorPickerCss = """
+.cp-row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; font-size:14px; color:var(--text-primary); }
+.cp-toggle { display:flex; align-items:center; gap:10px; font-family:inherit; font-size:13px; color:var(--text-primary);
+             background:var(--surface-softer); border:1px solid var(--input-border); border-radius:18px;
+             padding:4px 14px 4px 4px; cursor:pointer; }
+.cp-toggle:hover { border-color:var(--accent); }
+.cp-toggle:focus-visible, .cp-hex:focus { outline:2px solid var(--accent); outline-offset:1px; }
+.cp-swatch { width:24px; height:24px; border-radius:50%; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18); }
+.cp-panel { margin-top:6px; padding:14px; background:var(--surface-softer); border:1px solid var(--input-border); border-radius:12px; }
+.cp-panel[hidden] { display:none; }
+.cp-sv { position:relative; height:150px; border-radius:8px; cursor:crosshair; touch-action:none; user-select:none;
+         background:linear-gradient(to top,#000,rgba(0,0,0,0)), linear-gradient(to right,#fff,var(--cp-hue,#f00)); }
+.cp-hue { position:relative; height:14px; margin:14px 2px; border-radius:7px; cursor:pointer; touch-action:none; user-select:none;
+          background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }
+.cp-thumb { position:absolute; width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%; pointer-events:none;
+            border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 1px 4px rgba(0,0,0,.4); }
+.cp-hue-thumb { top:50%; }
+.cp-bottom { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.cp-hex { width:90px; height:30px; box-sizing:border-box; border-radius:15px; border:1px solid var(--input-border); padding:0 12px;
+          background:var(--hover-soft); color:var(--text-primary); font-family:Consolas,'Cascadia Mono',monospace; font-size:13px; outline:none; }
+.cp-presets { display:flex; gap:6px; flex-wrap:wrap; }
+.cp-preset { width:22px; height:22px; padding:0; border:none; border-radius:50%; cursor:pointer; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18); }
+.cp-preset:hover { transform:scale(1.15); }
+""";
+
+        private const string ColorPickerJs = """
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var panel = $('cpPanel'), toggle = $('cpToggle'), sv = $('cpSv'), svThumb = $('cpSvThumb'),
+      hue = $('cpHue'), hueThumb = $('cpHueThumb'), hex = $('cpHex'), swatch = $('cpSwatch'),
+      label = $('cpLabel'), presetsEl = $('cpPresets');
+  var H = 0, S = 1, V = 1, timer = null, pending = null;
+  var PRESETS = ['#DCE8F7', '#E4F2E7', '#F3E8FF', '#FFF1D6', '#1F2937', '#14213D', '#2B1B3D', '#0F1F1A'];
+
+  function clamp(n) { return Math.min(1, Math.max(0, n)); }
+
+  function hsvToRgb(h, s, v) {
+    var c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c, r, g, b;
+    if (h < 60) { r = c; g = x; b = 0; } else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; } else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
+    return [r + m, g + m, b + m].map(function (n) { return Math.round(n * 255); });
+  }
+  function toHex(rgb) {
+    return '#' + rgb.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join('');
+  }
+  function setFromHex(value) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(value.trim());
+    if (!m) return false;
+    var n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    r /= 255; g /= 255; b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min, h = H;
+    if (d > 0) {
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+      else if (max === g) h = ((b - r) / d + 2) * 60;
+      else h = ((r - g) / d + 4) * 60;
+    }
+    H = h; S = max === 0 ? 0 : d / max; V = max;   // grays keep the previous hue
+    return true;
+  }
+
+  function render() {
+    var color = toHex(hsvToRgb(H, S, V));
+    sv.style.setProperty('--cp-hue', toHex(hsvToRgb(H, 1, 1)));
+    svThumb.style.left = (S * 100) + '%';
+    svThumb.style.top = ((1 - V) * 100) + '%';
+    svThumb.style.background = color;
+    hueThumb.style.left = (H / 360 * 100) + '%';
+    hueThumb.style.background = toHex(hsvToRgb(H, 1, 1));
+    swatch.style.background = color;
+    label.textContent = color.toUpperCase();
+    if (document.activeElement !== hex) hex.value = color.toUpperCase();
+    return color;
+  }
+
+  function commit(isFinal) {
+    var color = render();
+    var radio = document.querySelector('input[name=theme][value=custom]');
+    if (radio) radio.checked = true;
+    if (isFinal) {
+      clearTimeout(timer); timer = null;
+      post('setCustomColor', true, color);
+      return;
+    }
+    pending = color;
+    if (timer) return;   // throttle live preview while dragging
+    timer = setTimeout(function () { timer = null; post('setCustomColor', true, pending); }, 90);
+  }
+
+  function drag(el, update) {
+    var active = false;
+    el.addEventListener('pointerdown', function (e) {
+      active = true; el.setPointerCapture(e.pointerId); update(e); commit(false); e.preventDefault();
+    });
+    el.addEventListener('pointermove', function (e) { if (active) { update(e); commit(false); } });
+    var end = function () { if (active) { active = false; commit(true); } };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+
+  drag(sv, function (e) {
+    var r = sv.getBoundingClientRect();
+    S = clamp((e.clientX - r.left) / r.width);
+    V = 1 - clamp((e.clientY - r.top) / r.height);
+  });
+  drag(hue, function (e) {
+    var r = hue.getBoundingClientRect();
+    H = clamp((e.clientX - r.left) / r.width) * 359.99;
+  });
+
+  hex.addEventListener('input', function () { if (setFromHex(hex.value)) commit(true); });
+  hex.addEventListener('blur', function () { hex.value = toHex(hsvToRgb(H, S, V)).toUpperCase(); });
+
+  PRESETS.forEach(function (c) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'cp-preset'; b.title = c; b.style.background = c;
+    b.addEventListener('click', function () { setFromHex(c); commit(true); });
+    presetsEl.appendChild(b);
+  });
+
+  toggle.addEventListener('click', function () {
+    panel.hidden = !panel.hidden;
+    toggle.setAttribute('aria-expanded', String(!panel.hidden));
+  });
+
+  setFromHex(panel.getAttribute('data-color'));
+  render();
+})();
+""";
+
         // lotus://settings/ - a real page rendered the same way lotus://newtab/ is,
         // sharing its color layout (background, card, and accent colors, logo mark,
         // typography). Toggles/buttons post JSON messages back to the host over
@@ -972,8 +1106,7 @@ namespace TerminalOS
                 .toggle-row {{ display:flex; align-items:center; justify-content:space-between;
                                padding:9px 0; font-size:14px; color:var(--text-primary); cursor:pointer; }}
                 .toggle-row input[type=checkbox], .toggle-row input[type=radio] {{ accent-color:var(--accent); width:18px; height:18px; cursor:pointer; }}
-                .color-input {{ width:46px; height:28px; padding:0; border:1px solid var(--input-border); border-radius:8px;
-                                background:var(--surface-softer); cursor:pointer; }}
+                {ColorPickerCss}
                 .muted {{ font-size:12.5px; color:var(--text-muted); margin:2px 0 14px; }}
                 .accent-btn {{ font-family:inherit; font-size:13px; border:none; border-radius:18px;
                                padding:9px 18px; background:var(--accent); color:var(--on-accent); cursor:pointer; }}
@@ -987,10 +1120,19 @@ namespace TerminalOS
                         {ThemeOption(LotusTheme.Light, "Lotus Light")}
                         {ThemeOption(LotusTheme.Dark, "Lotus Dark")}
                         {ThemeOption(LotusTheme.Custom, "Custom")}
-                        <div class='toggle-row' style='cursor:default;'>
+                        <div class='cp-row'>
                             <span>Custom color</span>
-                            <input type='color' id='customColor' class='color-input' value='{ThemeManager.CustomColorHex}'
-                                   oninput=""pickColor(this.value, false)"" onchange=""pickColor(this.value, true)"">
+                            <button type='button' class='cp-toggle' id='cpToggle' aria-expanded='false'>
+                                <span class='cp-swatch' id='cpSwatch'></span><span id='cpLabel'></span>
+                            </button>
+                        </div>
+                        <div class='cp-panel' id='cpPanel' data-color='{ThemeManager.CustomColorHex}' hidden>
+                            <div class='cp-sv' id='cpSv'><div class='cp-thumb' id='cpSvThumb'></div></div>
+                            <div class='cp-hue' id='cpHue'><div class='cp-thumb cp-hue-thumb' id='cpHueThumb'></div></div>
+                            <div class='cp-bottom'>
+                                <input type='text' class='cp-hex' id='cpHex' maxlength='7' spellcheck='false' autocomplete='off' aria-label='Hex color'>
+                                <div class='cp-presets' id='cpPresets'></div>
+                            </div>
                         </div>
                         <p class='muted' style='margin-bottom:0;'>Pick a color and Lotus builds a matching theme around it. Dark colors give a dark theme.</p>
                     </div>
@@ -1022,24 +1164,7 @@ namespace TerminalOS
                     }}));
                 }}
 
-                // Live-preview the custom theme while the picker is open, throttled so we
-                // don't rebuild the whole palette on every mouse move.
-                var colorTimer = null, lastColor = null;
-                function pickColor(value, isFinal) {{
-                    lastColor = value;
-                    var radio = document.querySelector('input[name=theme][value=custom]');
-                    if (radio) radio.checked = true;
-                    if (isFinal) {{
-                        clearTimeout(colorTimer); colorTimer = null;
-                        post('setCustomColor', true, value);
-                        return;
-                    }}
-                    if (colorTimer) return;
-                    colorTimer = setTimeout(function () {{
-                        colorTimer = null;
-                        post('setCustomColor', true, lastColor);
-                    }}, 90);
-                }}
+                {ColorPickerJs}
                 </script>
                 </body></html>";
         }
