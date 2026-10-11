@@ -630,6 +630,7 @@ namespace TerminalOS
             var host = uri.Host;
 
             if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
+            if (host.StartsWith("localhost:", StringComparison.OrdinalIgnoreCase)) return true;
             if (host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)) return true;
             if (System.Net.IPAddress.TryParse(host, out var ip)) return true; // IPv4/IPv6 literal
             if (uri.IsLoopback) return true;
