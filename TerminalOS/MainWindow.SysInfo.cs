@@ -606,6 +606,7 @@ namespace TerminalOS
         {
             return SysInfoPageTemplate
                 .Replace("%%THEME%%", ThemeManager.BuildCssVariables())
+                .Replace("%%BG%%", LotusBackgroundCss)
                 .Replace("%%FAVICON%%", LotusFaviconDataUri())
                 .Replace("%%LOGO%%", LotusSvg(40));
         }
@@ -616,6 +617,7 @@ namespace TerminalOS
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>SysInfo</title>
 <link rel='icon' type='image/svg+xml' href="data:image/svg+xml,%%FAVICON%%">
 <style id='lotus-theme'>%%THEME%%</style>
+<style>%%BG%%</style>
 <style>
 body { background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
        align-items:center; padding:70px 20px 60px; margin:0; color:var(--text-primary); }

@@ -174,8 +174,28 @@ namespace TerminalOS
             if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
             {
                 hwndSource.AddHook(WindowProc);
+                EnableRoundedCorners(hwndSource.Handle);
             }
         }
+
+        // Windows 11 only rounds the corners of a custom-chrome (WindowStyle=None) window
+        // when asked to. Harmless no-op on Windows 10 (the call just fails). When maximized,
+        // Windows automatically squares the corners again.
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWCP_ROUND = 2;
+
+        private static void EnableRoundedCorners(IntPtr hwnd)
+        {
+            try
+            {
+                int pref = DWMWCP_ROUND;
+                DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+            }
+            catch { }
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
         private const int WM_GETMINMAXINFO = 0x0024;
 
@@ -819,11 +839,47 @@ namespace TerminalOS
         // Lotus-scheme pages (lotus://newtab/, lotus://settings/)
         // ================================================================
 
+        // Shared by every lotus:// page. Two fixed layers: the theme's surface color, then the
+        // lotus photo multiplied into it (--bg-blend / --bg-opacity come from ThemeManager),
+        // so the image takes on whatever theme color is active and updates live.
+        // NOTE: pages must not put a background on <html>, or it would paint over these layers.
+        private const string LotusBackgroundCss = @"
+body::before, body::after { content:''; position:fixed; inset:0; pointer-events:none; }
+body::before { z-index:-2; background:var(--surface-secondary); }
+body::after { z-index:-1; background:url('lotus://assets/background.webp') right bottom / cover no-repeat;
+              mix-blend-mode:var(--bg-blend); opacity:var(--bg-opacity); }
+";
+
+        private static byte[] _backgroundImage;
+
+        private static byte[] LoadBackgroundImage()
+        {
+            if (_backgroundImage != null) return _backgroundImage;
+            using var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("Lotus.Background.webp");
+            if (stream == null) return null;
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            return _backgroundImage = ms.ToArray();
+        }
+
         // Handles every request on the "lotus" scheme. lotus://newtab/ and
         // lotus://settings/ resolve to real pages; anything else on the
         // scheme comes back as a 404, same as a normal web server would.
         private CoreWebView2WebResourceResponse BuildLotusResponse(CoreWebView2 core, string url)
         {
+            if (Uri.TryCreate(url, UriKind.Absolute, out var assetUri) &&
+                string.Equals(assetUri.Host, "assets", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(assetUri.AbsolutePath, "/background.webp", StringComparison.OrdinalIgnoreCase))
+            {
+                var img = LoadBackgroundImage();
+                if (img != null)
+                {
+                    return core.Environment.CreateWebResourceResponse(
+                        new MemoryStream(img), 200, "OK",
+                        "Content-Type: image/webp\r\nCache-Control: public, max-age=86400");
+                }
+            }
+
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && IsLotusPageRoot(uri))
             {
                 string html = null;
@@ -890,6 +946,7 @@ namespace TerminalOS
             return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>New Tab</title>
                 <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
                 <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
+                <style>{LotusBackgroundCss}</style>
                 <style>
                 body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
                         align-items:center; padding-top:110px; margin:0; }}
@@ -1094,6 +1151,7 @@ namespace TerminalOS
             return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Settings</title>
                 <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
                 <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
+                <style>{LotusBackgroundCss}</style>
                 <style>
                 body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
                         align-items:center; padding:70px 20px 60px; margin:0; color:var(--text-primary); }}

@@ -151,6 +151,9 @@ namespace TerminalOS
             {
                 sb.Append("--").Append(Kebab(token)).Append(':').Append(ToCss(_active[token])).Append(';');
             }
+            // Lotus background image blend (see LotusBackgroundCss in MainWindow):
+            // multiplied into the theme's own surface color, so it tints with any theme.
+            sb.Append("--bg-blend:multiply;--bg-opacity:").Append(IsDark ? "0.9" : "0.55").Append(';');
             sb.Append('}');
             return sb.ToString();
         }
