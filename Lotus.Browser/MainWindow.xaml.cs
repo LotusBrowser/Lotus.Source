@@ -1,0 +1,2154 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace Lotus.Browser
+{
+    public partial class MainWindow : Window
+    {
+        private const string HomeUrl = "lotus://newtab/";
+        private const string SearchUrl = "https://start.duckduckgo.com?q=";
+        private const string NewTabUrl = "lotus://newtab/";
+        private const string SettingsUrl = "lotus://settings/";
+
+        // These used to live as CheckBox.IsChecked values on the old app-menu
+        // flyout. Now that lotus://settings is a real page rendered into the
+        // WebView2 (like lotus://newtab), these plain fields are the source of
+        // truth; the settings page reads them when it renders and writes back
+        // to them over the WebMessage bridge (see HandleSettingsPageMessage).
+        private bool _trackerBlockEnabled = true;
+        private bool _httpsOnlyEnabled = true;
+        private bool _popupBlockEnabled = true;
+
+        // WebView2's default UA reports itself as "Edg/<version>" alongside the
+        // Chrome token, and depending on the installed WebView2 Runtime the
+        // Chrome version it reports can lag behind what Google's device/UA
+        // checks (e.g. reCAPTCHA) expect from a normal, current browser. Since
+        // Lotus is Chromium under the hood anyway, overriding the UA to a
+        // plain, current desktop Chrome string makes it present the same way
+        // any other Chromium browser would, which avoids Lotus getting flagged
+        // as a possible bot/automation client. Bump this string's version
+        // number periodically to track a real current Chrome release.
+        private const string StandardUserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
+        private CoreWebView2Environment _normalEnv;
+        private string _dataDir;
+
+        private readonly Dictionary<TabItem, WebView2> _browsers = new Dictionary<TabItem, WebView2>();
+
+        private readonly List<BookmarkEntry> _bookmarks = new List<BookmarkEntry>();
+        private readonly List<HistoryEntry> _history = new List<HistoryEntry>();
+        private readonly Stack<string> _closedTabs = new Stack<string>();
+        public ObservableCollection<DownloadItem> Downloads { get; } = new ObservableCollection<DownloadItem>();
+
+        private int _blockedCount = 0;
+        private TabItem _draggedTab;
+
+        // PageSplit state. A split tab keeps its "primary" TabItem in the tab strip;
+        // the "secondary" TabItem (and its WebView2) stays alive in _browsers but is
+        // hidden from the strip, so two pages occupy a single tab.
+        private readonly Dictionary<TabItem, SplitState> _splits = new Dictionary<TabItem, SplitState>();
+        private readonly Dictionary<TabItem, TabItem> _splitOwner = new Dictionary<TabItem, TabItem>(); // secondary -> primary
+        private readonly List<Border> _paneWrappers = new List<Border>();
+        private Border _leftPane;
+        private Border _rightPane;
+        private DispatcherTimer _splitFocusTimer;
+        private readonly string _startupUrl;
+
+        private static readonly string[] TrackerDomains =
+        {
+            "doubleclick.net", "googlesyndication.com", "google-analytics.com",
+            "googletagmanager.com", "googletagservices.com", "scorecardresearch.com",
+            "adsystem.com", "adnxs.com", "hotjar.com", "facebook.com/tr",
+            "connect.facebook.net", "criteo.com", "taboola.com", "outbrain.com"
+        };
+
+        public MainWindow(string startupUrl = null)
+        {
+            InitializeComponent();
+            DataContext = this;
+            _startupUrl = startupUrl;
+            Loaded += async (s, e) => await InitializeAsync();
+            PreviewKeyDown += Window_PreviewKeyDown;
+            StateChanged += (s, e) => UpdateMaximizeRestoreIcon();
+            ThemeManager.ThemeChanged += OnThemeChanged;
+
+            // Best-effort, cheap, and self-healing (re-writes the registered
+            // exe path every launch) - see DefaultBrowserRegistrar for why this
+            // can't just flip the OS default on its own.
+            DefaultBrowserRegistrar.EnsureRegistered();
+        }
+
+        // Called by App.xaml.cs when a second Lotus launch (e.g. the user
+        // clicked a link while Lotus is set as their default browser) hands
+        // its URL off to this already-running window instead of opening a
+        // duplicate one.
+        public async void OpenUrlFromExternal(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+
+            await AddNewTab(url);
+        }
+
+        // ================================================================
+        // Theming
+        // ================================================================
+
+        // The WPF chrome repaints by itself (everything is a {DynamicResource}); this
+        // handles the pieces that don't: code-set brushes, open lotus:// pages, and
+        // the color scheme that websites see.
+        private void OnThemeChanged()
+        {
+            UpdateBookmarkStar();
+            UpdateSecurityIcon(CurrentBrowser);
+            ApplyBrowserColorScheme();
+
+            // Live-update open lotus:// pages (no reload, so SysInfo keeps its output).
+            string script = ThemeManager.BuildApplyScript();
+            foreach (var browser in _browsers.Values)
+            {
+                var core = browser.CoreWebView2;
+                if (core?.Source != null &&
+                    core.Source.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = core.ExecuteScriptAsync(script);
+                }
+            }
+        }
+
+        // Lets sites that support prefers-color-scheme follow the theme. Lotus Light
+        // keeps the old behavior (follow Windows); dark themes ask for dark pages.
+        private void ApplyBrowserColorScheme()
+        {
+            var scheme = ThemeManager.Current == LotusTheme.Light
+                ? CoreWebView2PreferredColorScheme.Auto
+                : (ThemeManager.IsDark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light);
+
+            foreach (var browser in _browsers.Values)
+            {
+                var profile = browser.CoreWebView2?.Profile;
+                if (profile != null) profile.PreferredColorScheme = scheme;
+            }
+        }
+
+        // ================================================================
+        // Custom title bar
+        // ================================================================
+
+        private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+        private void MaximizeRestore_Click(object sender, RoutedEventArgs e) =>
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+        private void CloseWindow_Click(object sender, RoutedEventArgs e) => Close();
+
+        private void UpdateMaximizeRestoreIcon()
+        {
+            bool maximized = WindowState == WindowState.Maximized;
+            MaximizeRestoreIcon.Data = (Geometry)FindResource(maximized ? "IconWinRestore" : "IconWinMaximize");
+            MaximizeRestoreButton.ToolTip = maximized ? "Restore" : "Maximize";
+        }
+
+        // ================================================================
+        // Taskbar-aware maximize
+        // ================================================================
+        // With WindowStyle="None" (custom chrome), WPF's normal "maximize to the
+        // monitor's work area" behavior doesn't kick in on its own - the window
+        // just grows to the full monitor bounds and ends up drawing over the
+        // taskbar. Handling WM_GETMINMAXINFO ourselves and clamping to the
+        // correct monitor's work area (via GetMonitorInfo) fixes that, including
+        // on multi-monitor setups.
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            if (PresentationSource.FromVisual(this) is HwndSource hwndSource)
+            {
+                hwndSource.AddHook(WindowProc);
+                EnableRoundedCorners(hwndSource.Handle);
+            }
+        }
+
+        // Windows 11 only rounds the corners of a custom-chrome (WindowStyle=None) window
+        // when asked to. Harmless no-op on Windows 10 (the call just fails). When maximized,
+        // Windows automatically squares the corners again.
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWCP_ROUND = 2;
+
+        private static void EnableRoundedCorners(IntPtr hwnd)
+        {
+            try
+            {
+                int pref = DWMWCP_ROUND;
+                DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+            }
+            catch { }
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int WM_GETMINMAXINFO = 0x0024;
+
+        private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_GETMINMAXINFO)
+            {
+                ApplyWorkAreaToMinMaxInfo(hwnd, lParam);
+                handled = true;
+            }
+            return IntPtr.Zero;
+        }
+
+        private static void ApplyWorkAreaToMinMaxInfo(IntPtr hwnd, IntPtr lParam)
+        {
+            var mmi = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO));
+
+            const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+            IntPtr monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+
+            if (monitor != IntPtr.Zero)
+            {
+                var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+                GetMonitorInfo(monitor, ref monitorInfo);
+
+                RECT workArea = monitorInfo.rcWork;
+                RECT monitorArea = monitorInfo.rcMonitor;
+
+                // Offset/size relative to the monitor, so the maximized window fills
+                // the work area (i.e. stops short of the taskbar) rather than the
+                // full monitor bounds.
+                mmi.ptMaxPosition.x = workArea.left - monitorArea.left;
+                mmi.ptMaxPosition.y = workArea.top - monitorArea.top;
+                mmi.ptMaxSize.x = workArea.right - workArea.left;
+                mmi.ptMaxSize.y = workArea.bottom - workArea.top;
+            }
+
+            Marshal.StructureToPtr(mmi, lParam, true);
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr handle, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT { public int x; public int y; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int left; public int top; public int right; public int bottom; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MINMAXINFO
+        {
+            public POINT ptReserved;
+            public POINT ptMaxSize;
+            public POINT ptMaxPosition;
+            public POINT ptMinTrackSize;
+            public POINT ptMaxTrackSize;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        // ================================================================
+        // Tab strip sizing (shrink tabs to fit, Edge/Chrome-style)
+        // ================================================================
+
+        private const double MaxTabWidth = 220;
+
+        // Smallest a tab is ever assigned - just enough room for the close
+        // button (20px + margins) plus a sliver for the favicon. Below this,
+        // tabs are left at this width and simply overlap each other rather
+        // than shrinking further, so the close button never has to compete
+        // with the title for space.
+        private const double MinTabWidth = 30;
+
+        private void TitleBar_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateTabWidths();
+
+        // Recomputes an even per-tab width that fits whatever room is left in the
+        // title bar after the brand mark, new-tab button, app menu, and window
+        // caption buttons. Tabs shrink together as more are opened, down to
+        // MinTabWidth - past that point they hold at MinTabWidth and the strip
+        // simply grows wider than the available space rather than crushing the
+        // close button out of existence.
+        private void UpdateTabWidths()
+        {
+            int count = BrowserTabs.Items.Count;
+            if (count == 0 || TitleBar.ActualWidth <= 0) return;
+
+            double reserved = 32 /* brand mark */
+                              + NewTabButton.ActualWidth + 4
+                              + MinimizeButton.ActualWidth
+                              + MaximizeRestoreButton.ActualWidth
+                              + CloseWindowButton.ActualWidth
+                              + 20 /* always-available drag margin */;
+
+            double available = Math.Max(0, TitleBar.ActualWidth - reserved);
+            double perTab = Math.Max(MinTabWidth, Math.Min(MaxTabWidth, available / count));
+
+            foreach (var item in BrowserTabs.Items)
+            {
+                if (item is TabItem tab) tab.Width = perTab;
+            }
+        }
+
+        private async Task InitializeAsync()
+        {
+            _dataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LotusBrowser");
+            Directory.CreateDirectory(_dataDir);
+
+            LoadBookmarks();
+            LoadHistory();
+            RefreshBookmarksUI();
+
+            _normalEnv = await CoreWebView2Environment.CreateAsync(
+                browserExecutableFolder: null,
+                userDataFolder: _dataDir,
+                options: CreateEnvironmentOptions());
+            await AddNewTab(_startupUrl);
+        }
+
+        // Registers the "lotus" URI scheme (lotus://newtab/, etc.) so the browser can
+        // navigate to and serve its own internal pages as real, addressable documents
+        // instead of faking them with NavigateToString.
+        private static CoreWebView2EnvironmentOptions CreateEnvironmentOptions()
+        {
+            var lotusScheme = new CoreWebView2CustomSchemeRegistration("lotus")
+            {
+                TreatAsSecure = true,
+                HasAuthorityComponent = true
+            };
+
+            // Some WebView2 runtime/SDK combinations return null from the
+            // CustomSchemeRegistrations property getter instead of a lazily-created
+            // list, which throws on .Add(). Passing the list through the constructor
+            // sidesteps that entirely.
+            return new CoreWebView2EnvironmentOptions(
+                additionalBrowserArguments: null,
+                language: null,
+                targetCompatibleBrowserVersion: null,
+                allowSingleSignOnUsingOSPrimaryAccount: false,
+                customSchemeRegistrations: new List<CoreWebView2CustomSchemeRegistration> { lotusScheme });
+        }
+
+        // ================================================================
+        // Persistence
+        // ================================================================
+
+        private string BookmarksPath => Path.Combine(_dataDir, "bookmarks.json");
+        private string HistoryPath => Path.Combine(_dataDir, "history.json");
+
+        private void LoadBookmarks()
+        {
+            try
+            {
+                if (File.Exists(BookmarksPath))
+                {
+                    var items = JsonSerializer.Deserialize<List<BookmarkEntry>>(File.ReadAllText(BookmarksPath));
+                    if (items != null) _bookmarks.AddRange(items);
+                }
+            }
+            catch { }
+        }
+
+        private void SaveBookmarks()
+        {
+            try { File.WriteAllText(BookmarksPath, JsonSerializer.Serialize(_bookmarks)); } catch { }
+        }
+
+        private void LoadHistory()
+        {
+            try
+            {
+                if (File.Exists(HistoryPath))
+                {
+                    var items = JsonSerializer.Deserialize<List<HistoryEntry>>(File.ReadAllText(HistoryPath));
+                    if (items != null) _history.AddRange(items);
+                }
+            }
+            catch { }
+        }
+
+        private void SaveHistory()
+        {
+            try
+            {
+                var trimmed = _history.OrderByDescending(h => h.VisitedAt).Take(5000).ToList();
+                File.WriteAllText(HistoryPath, JsonSerializer.Serialize(trimmed));
+            }
+            catch { }
+        }
+
+        // ================================================================
+        // Tab management
+        // ================================================================
+
+        private async void NewTab_Click(object sender, RoutedEventArgs e) { await AddNewTab(null); }
+
+        // splitWith: when set, the new page is created as the right-hand pane of
+        // that tab's PageSplit instead of getting a tab of its own.
+        private async Task<TabItem> AddNewTab(string url, TabItem splitWith = null)
+        {
+            if (splitWith != null && _splits.ContainsKey(splitWith)) return null;
+
+            var browser = new WebView2();
+
+            // Start the tab in its loading state so the spinner is what the user
+            // sees the instant the tab is created - before any NavigationStarting
+            // event has had a chance to fire from the WebView2 below.
+            var header = new TabHeaderInfo { Title = "New Tab", IsLoading = true };
+            var tab = new TabItem { Header = header };
+
+            _browsers[tab] = browser;
+
+            // Lets PageSplit know which pane the user is working in.
+            browser.GotFocus += (s, e) => OnPageFocused(tab);
+            browser.GotKeyboardFocus += (s, e) => OnPageFocused(tab);
+
+            if (splitWith == null)
+            {
+                BrowserTabs.Items.Add(tab);
+                BrowserTabs.SelectedItem = tab;
+                UpdateTabWidths();
+            }
+            else
+            {
+                CreateSplit(splitWith, tab);
+            }
+
+            await browser.EnsureCoreWebView2Async(_normalEnv);
+
+            // Present as a normal desktop Chrome browser rather than WebView2's
+            // default UA, so Google's bot/device checks (reCAPTCHA in particular)
+            // treat Lotus like any other Chromium browser instead of flagging it.
+            // Must be set before the first Navigate call below.
+            browser.CoreWebView2.Settings.UserAgent = StandardUserAgent;
+
+            // WebView2 paints an opaque white background by default, which stays visible
+            // before a page's own CSS background paints over it. Making it transparent
+            // lets the page's own background - including dark themes - be what's shown.
+            browser.DefaultBackgroundColor = System.Drawing.Color.Transparent;
+            ApplyBrowserColorScheme();
+
+            ConfigureSecurity(browser, tab, header);
+
+            browser.CoreWebView2.SourceChanged += (s, e) =>
+            {
+                if (tab == ActiveTab)
+                {
+                    UpdateAddressBar();
+                    UpdateNavButtons();
+                    UpdateSecurityIcon(browser);
+                    UpdateBookmarkStar();
+                }
+            };
+
+            browser.CoreWebView2.Navigate(string.IsNullOrEmpty(url) ? NewTabUrl : url);
+            return tab;
+        }
+
+        private void ConfigureSecurity(WebView2 browser, TabItem tab, TabHeaderInfo header)
+        {
+            var core = browser.CoreWebView2;
+
+            core.DocumentTitleChanged += (s, e) =>
+            {
+                var title = core.DocumentTitle;
+                header.Title = string.IsNullOrWhiteSpace(title) ? "New Tab" : title;
+                SyncSplitHeader(tab);
+            };
+
+            core.FaviconChanged += async (s, e) =>
+            {
+                    using var stream = await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
+                    if (stream == null) { header.Favicon = null; return; }
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.StreamSource = stream;
+                    bmp.EndInit();
+                    header.Favicon = bmp;
+            };
+
+            core.NavigationStarting += (s, e) =>
+            {
+                // Flip the tab into its loading state: the favicon slot will show
+                // the Lotus spinner. Clear any previous favicon too, so that if the
+                // new page turns out to have no favicon at all, we fall through to
+                // the fallback globe rather than briefly redisplaying the old page's
+                // icon while we're still deciding.
+                header.IsLoading = true;
+                if (tab == ActiveTab) UpdateSecurityIcon(browser);
+            };
+
+            core.NavigationCompleted += (s, e) =>
+            {
+                // Page (or navigation attempt) is done - drop the spinner. The
+                // favicon slot will now resolve to either the real page favicon
+                // (if FaviconChanged delivered one) or the fallback globe.
+                header.IsLoading = false;
+
+                if (e.IsSuccess && core.Source != null && !core.Source.StartsWith("data:"))
+                {
+                    var entry = new HistoryEntry
+                    {
+                        Title = string.IsNullOrWhiteSpace(core.DocumentTitle) ? core.Source : core.DocumentTitle,
+                        Url = core.Source,
+                        VisitedAt = DateTime.Now
+                    };
+                    _history.Insert(0, entry);
+                    SaveHistory();
+                }
+            };
+
+            core.NewWindowRequested += (s, e) =>
+            {
+                if (_popupBlockEnabled)
+                {
+                    e.Handled = true;
+                }
+                else
+                {
+                    e.Handled = true;
+                    _ = AddNewTab(e.Uri);
+                }
+            };
+
+            core.PermissionRequested += (s, e) =>
+            {
+                switch (e.PermissionKind)
+                {
+                    case CoreWebView2PermissionKind.Camera:
+                    case CoreWebView2PermissionKind.Microphone:
+                    case CoreWebView2PermissionKind.Geolocation:
+                        var result = MessageBox.Show(
+                            $"{e.Uri} is requesting {e.PermissionKind}. Allow?",
+                            "Permission Request", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                        e.State = result == MessageBoxResult.Yes
+                            ? CoreWebView2PermissionState.Allow
+                            : CoreWebView2PermissionState.Deny;
+                        break;
+                    default:
+                        e.State = CoreWebView2PermissionState.Allow;
+                        break;
+                }
+            };
+
+            // Messages posted by lotus:// pages via window.chrome.webview.postMessage
+            // (currently just the settings page's toggles/buttons). e.Source is the
+            // origin of the frame that actually sent the message, so a regular web
+            // page can't spoof one of these by posting the same JSON shape - only
+            // content we served ourselves on the lotus:// scheme can reach this.
+            core.WebMessageReceived += (s, e) =>
+            {
+                if (e.Source?.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    string raw;
+                    try { raw = e.TryGetWebMessageAsString(); }
+                    catch { return; }
+                    if (TryHandleSysInfoMessage(core, e.Source, raw)) return;
+                    HandleSettingsPageMessage(raw);
+                }
+            };
+
+            core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (s, e) =>
+            {
+                var url = e.Request.Uri;
+
+                if (url.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase))
+                {
+                    e.Response = BuildLotusResponse(core, url);
+                    return;
+                }
+
+                if (_trackerBlockEnabled && TrackerDomains.Any(d => url.Contains(d)))
+                {
+                    e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked", "");
+                    _blockedCount++;
+                    return;
+                }
+
+                if (_httpsOnlyEnabled && url.StartsWith("http://") && !IsLocalOrDirectIpHost(url))
+                {
+                    if (e.ResourceContext == CoreWebView2WebResourceContext.Document)
+                    {
+                        var upgraded = "https://" + url.Substring("http://".Length);
+                        e.Response = core.Environment.CreateWebResourceResponse(
+                            null, 307, "Temporary Redirect", $"Location: {upgraded}\r\n");
+                    }
+                }
+            };
+
+            core.DownloadStarting += (s, e) =>
+            {
+                e.Handled = true; // suppress default WebView2 download popup, use our shelf instead
+
+                var item = new DownloadItem
+                {
+                    FileName = Path.GetFileName(e.ResultFilePath),
+                    FilePath = e.ResultFilePath,
+                    IsInProgress = true,
+                    StatusText = "Starting…"
+                };
+
+                var op = e.DownloadOperation;
+
+                Dispatcher.Invoke(() =>
+                {
+                    Downloads.Insert(0, item);
+                    DownloadShelf.Visibility = Visibility.Visible;
+                });
+
+                op.BytesReceivedChanged += (s2, e2) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        var total = op.TotalBytesToReceive ?? 0;
+                        item.Progress = total > 0 ? (double)op.BytesReceived * 100.0 / total : 0;
+                        item.StatusText = FormatBytes((ulong)op.BytesReceived) +
+                            (total > 0 ? $" of {FormatBytes((ulong)total)}" : "");
+                    });
+                };
+
+                op.StateChanged += (s2, e2) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (op.State == CoreWebView2DownloadState.Completed)
+                        {
+                            item.IsInProgress = false;
+                            item.Progress = 100;
+                            item.StatusText = "Done";
+                        }
+                        else if (op.State == CoreWebView2DownloadState.Interrupted)
+                        {
+                            item.IsInProgress = false;
+                            item.StatusText = "Failed";
+                        }
+                    });
+                };
+            };
+
+            // Let our own shortcuts (Ctrl+F, Ctrl+T, Ctrl+P, etc.) win instead of
+            // Chromium's built-in accelerator handling, so they bubble up to
+            // Window_PreviewKeyDown even while focus is inside the page.
+            core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+        }
+
+        // Sites reached by "localhost", "127.0.0.1", a bare LAN/direct IP, or a
+        // hostname with no dot (e.g. a dev box or router at "http://router/")
+        // very often only ever speak plain HTTP - there's no public cert for
+        // them to have HTTPS in the first place. Forcing the HTTPS-only upgrade
+        // on those just breaks the page, so they're excluded from it. Regular
+        // public domains (e.g. http://example.com) are still upgraded as before.
+        private static bool IsLocalOrDirectIpHost(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+
+            var host = uri.Host;
+
+            if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
+            if (host.StartsWith("localhost:", StringComparison.OrdinalIgnoreCase)) return true;
+            if (host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)) return true;
+            if (System.Net.IPAddress.TryParse(host, out var ip)) return true; // IPv4/IPv6 literal
+            if (uri.IsLoopback) return true;
+            if (!host.Contains('.')) return true; // single-label hostnames (dev/LAN boxes)
+
+            return false;
+        }
+
+        private static string FormatBytes(ulong bytes)
+        {
+            string[] units = { "B", "KB", "MB", "GB" };
+            double b = bytes;
+            int i = 0;
+            while (b >= 1024 && i < units.Length - 1) { b /= 1024; i++; }
+            return $"{b:0.#} {units[i]}";
+        }
+
+        private void CloseTab_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is TabItem tab)
+            {
+                CloseTab(tab);
+            }
+        }
+
+        // wholeGroup: closing a split tab from its tab-strip "x" closes both pages.
+        // Ctrl+W passes false so only the active pane closes and the other page
+        // carries on as a normal tab.
+        private void CloseTab(TabItem tab, bool wholeGroup = true)
+        {
+            if (!_browsers.ContainsKey(tab)) return;
+
+            // Closing the hidden (secondary) page of a split: the owner reverts to a plain tab.
+            if (_splitOwner.TryGetValue(tab, out var owner))
+            {
+                _splits.Remove(owner);
+                _splitOwner.Remove(tab);
+                DiscardPage(tab);
+                MarkUnsplit(owner);
+                if (BrowserTabs.SelectedItem != owner) BrowserTabs.SelectedItem = owner;
+                ShowActiveBrowser();
+                SyncChromeToActivePage();
+                FocusActivePane();
+                return;
+            }
+
+            if (_splits.TryGetValue(tab, out var split))
+            {
+                if (wholeGroup)
+                {
+                    _splits.Remove(tab);
+                    _splitOwner.Remove(split.Secondary);
+                    DiscardPage(split.Secondary);
+                    MarkUnsplit(tab);
+                }
+                else
+                {
+                    // Hand the tab-strip slot to the surviving page, then close this one normally.
+                    DissolveSplit(split, selectSecondary: true);
+                }
+            }
+
+            DiscardPage(tab);
+            BrowserTabs.Items.Remove(tab);
+            UpdateTabWidths();
+
+            if (BrowserTabs.Items.Count == 0)
+            {
+                Close();
+            }
+        }
+
+        // Remembers the page's URL for Ctrl+Shift+T and disposes its WebView2.
+        private void DiscardPage(TabItem tab)
+        {
+            if (!_browsers.TryGetValue(tab, out var browser)) return;
+
+            var url = browser.CoreWebView2?.Source;
+            if (!string.IsNullOrEmpty(url))
+            {
+                _closedTabs.Push(url);
+            }
+
+            browser.Dispose();
+            _browsers.Remove(tab);
+        }
+
+        private async void ReopenClosedTab_Click(object sender, RoutedEventArgs e)
+        {
+            await ReopenClosedTab();
+        }
+
+        private async Task ReopenClosedTab()
+        {
+            if (_closedTabs.Count == 0) return;
+            var url = _closedTabs.Pop();
+            await AddNewTab(url);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+            SaveBookmarks();
+            SaveHistory();
+        }
+
+        private void BrowserTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // The tab strip only ever shows one entry per split, so a selection change
+            // always means "show this tab's page(s)".
+            if (e.OriginalSource != BrowserTabs) return;
+            ShowActiveBrowser();
+            SyncChromeToActivePage();
+        }
+
+        // Re-syncs every piece of toolbar chrome with whichever page is active
+        // (the selected tab, or the focused pane when that tab is split).
+        private void SyncChromeToActivePage()
+        {
+            UpdateAddressBar();
+            UpdateNavButtons();
+            UpdateBookmarkStar();
+            if (CurrentBrowser != null) UpdateSecurityIcon(CurrentBrowser);
+            UpdateSplitButton();
+        }
+
+        private void ShowActiveBrowser()
+        {
+            // Browsers can only have one visual parent, so release them from the
+            // split-pane wrappers before anything gets re-hosted.
+            foreach (var wrapper in _paneWrappers) wrapper.Child = null;
+            _paneWrappers.Clear();
+            _leftPane = null;
+            _rightPane = null;
+
+            ContentHost.Children.Clear();
+            ContentHost.ColumnDefinitions.Clear();
+
+            if (!(BrowserTabs.SelectedItem is TabItem tab))
+            {
+                StopSplitFocusWatch();
+                return;
+            }
+
+            if (_splits.TryGetValue(tab, out var split) &&
+                _browsers.TryGetValue(split.Left, out var leftBrowser) &&
+                _browsers.TryGetValue(split.Right, out var rightBrowser))
+            {
+                double ratio = Math.Max(0.1, Math.Min(0.9, split.Ratio));
+                ContentHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ratio, GridUnitType.Star), MinWidth = 160 });
+                ContentHost.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                ContentHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1 - ratio, GridUnitType.Star), MinWidth = 160 });
+
+                _leftPane = MakePane(leftBrowser);
+                _rightPane = MakePane(rightBrowser);
+                Grid.SetColumn(_leftPane, 0);
+                Grid.SetColumn(_rightPane, 2);
+
+                var splitter = new GridSplitter { Style = (Style)FindResource("PageSplitSplitter") };
+                Grid.SetColumn(splitter, 1);
+                splitter.DragCompleted += (s, e) => StoreSplitRatio(split);
+                splitter.MouseDoubleClick += (s, e) => ResetSplitRatio(split);
+
+                ContentHost.Children.Add(_leftPane);
+                ContentHost.Children.Add(splitter);
+                ContentHost.Children.Add(_rightPane);
+
+                UpdatePaneHighlight(split);
+                StartSplitFocusWatch();
+                return;
+            }
+
+            StopSplitFocusWatch();
+            if (_browsers.TryGetValue(tab, out var browser))
+            {
+                ContentHost.Children.Add(browser);
+            }
+        }
+
+        // ================================================================
+        // Tab drag-to-reorder
+        // ================================================================
+
+        private Point _dragStart;
+
+        private void Tab_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _dragStart = e.GetPosition(null);
+            if ((sender as FrameworkElement)?.TemplatedParent is TabItem tab)
+            {
+                _draggedTab = tab;
+            }
+        }
+
+        private void Tab_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed || _draggedTab == null) return;
+            var pos = e.GetPosition(null);
+            if (Math.Abs(pos.X - _dragStart.X) < 10) return;
+
+            DragDrop.DoDragDrop((DependencyObject)sender, _draggedTab, DragDropEffects.Move);
+        }
+
+        private void Tab_Drop(object sender, DragEventArgs e)
+        {
+            if (!(e.Data.GetData(typeof(TabItem)) is TabItem source)) return;
+            if (!((sender as FrameworkElement)?.TemplatedParent is TabItem target)) return;
+            if (source == target) return;
+
+            int sourceIndex = BrowserTabs.Items.IndexOf(source);
+            int targetIndex = BrowserTabs.Items.IndexOf(target);
+            if (sourceIndex < 0 || targetIndex < 0) return;
+
+            BrowserTabs.Items.Remove(source);
+            BrowserTabs.Items.Insert(targetIndex, source);
+            BrowserTabs.SelectedItem = source;
+            _draggedTab = null;
+        }
+
+        // ================================================================
+        // PageSplit - two pages side by side inside a single tab
+        // ================================================================
+        // Toolbar button (or Ctrl+Shift+S) splits the current tab with a new page or any
+        // other open tab. The tab strip shows one tab for the pair ("A | B"); each pane
+        // is a full browser with its own history, and the toolbar/address bar follow the
+        // focused pane (accent outline). Drag the divider to resize, double-click to
+        // reset, F6 switches panes, Ctrl+W closes the focused pane.
+
+        private sealed class SplitState
+        {
+            public TabItem Primary = null!;     // lives in the tab strip
+            public TabItem Secondary = null!;   // hidden from the strip while split
+            public bool SecondaryActive;        // which page owns focus / the toolbar
+            public bool Swapped;                // true = Secondary is drawn on the left
+            public double Ratio = 0.5;          // share of the width given to the LEFT pane
+
+            public TabItem Left => Swapped ? Secondary : Primary;
+            public TabItem Right => Swapped ? Primary : Secondary;
+            public TabItem Active => SecondaryActive ? Secondary : Primary;
+        }
+
+        private Border MakePane(WebView2 browser)
+        {
+            var pane = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                BorderThickness = new Thickness(2),
+                BorderBrush = Brushes.Transparent,
+                ClipToBounds = true,
+                Child = browser
+            };
+            _paneWrappers.Add(pane);
+            return pane;
+        }
+
+        // Accent outline on the focused pane; the other stays unframed.
+        private void UpdatePaneHighlight(SplitState split)
+        {
+            if (_leftPane == null || _rightPane == null) return;
+            bool leftActive = split.Active == split.Left;
+            SetPaneActive(_leftPane, leftActive);
+            SetPaneActive(_rightPane, !leftActive);
+        }
+
+        private static void SetPaneActive(Border pane, bool active)
+        {
+            if (active) pane.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+            else pane.BorderBrush = Brushes.Transparent;
+        }
+
+        private void CreateSplit(TabItem primary, TabItem secondary)
+        {
+            var split = new SplitState { Primary = primary, Secondary = secondary, SecondaryActive = true };
+            _splits[primary] = split;
+            _splitOwner[secondary] = primary;
+
+            SyncSplitHeader(primary);
+            UpdateTabWidths();
+
+            if (BrowserTabs.SelectedItem != primary) BrowserTabs.SelectedItem = primary;
+            ShowActiveBrowser();
+            SyncChromeToActivePage();
+            FocusActivePane();
+        }
+
+        // Splits the current tab with a tab that is already open (it leaves the strip).
+        private void SplitWithExistingTab(TabItem other)
+        {
+            var current = CurrentTab;
+            if (current == null || other == null || other == current) return;
+            if (_splits.ContainsKey(current) || _splits.ContainsKey(other)) return;
+            if (!BrowserTabs.Items.Contains(other)) return;
+
+            BrowserTabs.Items.Remove(other);
+            CreateSplit(current, other);
+        }
+
+        // Turns a split back into two ordinary tabs, keeping both pages alive.
+        private void DissolveSplit(SplitState split, bool selectSecondary)
+        {
+            _splits.Remove(split.Primary);
+            _splitOwner.Remove(split.Secondary);
+            MarkUnsplit(split.Primary);
+
+            int index = BrowserTabs.Items.IndexOf(split.Primary);
+            BrowserTabs.Items.Insert(Math.Min(index + 1, BrowserTabs.Items.Count), split.Secondary);
+            UpdateTabWidths();
+
+            BrowserTabs.SelectedItem = selectSecondary ? split.Secondary : split.Primary;
+            ShowActiveBrowser();
+            SyncChromeToActivePage();
+            FocusActivePane();
+        }
+
+        private void TogglePageSplit()
+        {
+            var current = CurrentTab;
+            if (current == null) return;
+
+            if (_splits.TryGetValue(current, out var split)) DissolveSplit(split, split.SecondaryActive);
+            else _ = AddNewTab(null, current);
+        }
+
+        private void SwapSplit(SplitState split)
+        {
+            split.Swapped = !split.Swapped;
+            split.Ratio = 1 - split.Ratio; // each page keeps its width
+            ShowActiveBrowser();
+            FocusActivePane();
+        }
+
+        private void StoreSplitRatio(SplitState split)
+        {
+            if (ContentHost.ColumnDefinitions.Count != 3) return;
+            double left = ContentHost.ColumnDefinitions[0].ActualWidth;
+            double right = ContentHost.ColumnDefinitions[2].ActualWidth;
+            if (left + right > 0) split.Ratio = left / (left + right);
+        }
+
+        private void ResetSplitRatio(SplitState split)
+        {
+            split.Ratio = 0.5;
+            ShowActiveBrowser();
+        }
+
+        private bool FocusOtherPane()
+        {
+            if (!(CurrentTab is TabItem sel) || !_splits.TryGetValue(sel, out var split)) return false;
+
+            split.SecondaryActive = !split.SecondaryActive;
+            UpdatePaneHighlight(split);
+            SyncChromeToActivePage();
+            FocusActivePane();
+            return true;
+        }
+
+        private void FocusActivePane()
+        {
+            Dispatcher.BeginInvoke(new Action(() => CurrentBrowser?.Focus()), DispatcherPriority.Input);
+        }
+
+        // A pane's WebView2 got keyboard focus: make it the active pane.
+        private void OnPageFocused(TabItem tab)
+        {
+            if (!(CurrentTab is TabItem sel) || !_splits.TryGetValue(sel, out var split)) return;
+
+            bool isSecondary = tab == split.Secondary;
+            if (!isSecondary && tab != split.Primary) return;
+            if (split.SecondaryActive == isSecondary) return;
+
+            split.SecondaryActive = isSecondary;
+            UpdatePaneHighlight(split);
+            SyncChromeToActivePage();
+        }
+
+        // Safety net next to the focus events above: while a split is on screen, poll
+        // WPF's focus state so clicking into a pane always moves the toolbar to it.
+        private void StartSplitFocusWatch()
+        {
+            if (_splitFocusTimer == null)
+            {
+                _splitFocusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+                _splitFocusTimer.Tick += (s, e) => PollSplitFocus();
+            }
+            _splitFocusTimer.Start();
+        }
+
+        private void StopSplitFocusWatch() => _splitFocusTimer?.Stop();
+
+        private void PollSplitFocus()
+        {
+            if (!(CurrentTab is TabItem sel) || !_splits.TryGetValue(sel, out var split))
+            {
+                StopSplitFocusWatch();
+                return;
+            }
+
+            foreach (var page in new[] { split.Primary, split.Secondary })
+            {
+                if (_browsers.TryGetValue(page, out var browser) && browser.IsKeyboardFocusWithin)
+                {
+                    OnPageFocused(page);
+                    return;
+                }
+            }
+        }
+
+        // The tab strip entry for a split shows "Title A | Title B" plus a split glyph.
+        private void SyncSplitHeader(TabItem tab)
+        {
+            var primary = _splitOwner.TryGetValue(tab, out var owner) ? owner : tab;
+            if (!_splits.TryGetValue(primary, out var split)) return;
+            if (!(split.Primary.Header is TabHeaderInfo primaryHeader) ||
+                !(split.Secondary.Header is TabHeaderInfo secondaryHeader)) return;
+
+            primaryHeader.SplitTitle = secondaryHeader.Title;
+            primaryHeader.IsSplit = true;
+        }
+
+        private static void MarkUnsplit(TabItem primary)
+        {
+            if (primary.Header is TabHeaderInfo header)
+            {
+                header.IsSplit = false;
+                header.SplitTitle = null;
+            }
+        }
+
+        private void UpdateSplitButton()
+        {
+            bool split = CurrentTab != null && _splits.ContainsKey(CurrentTab);
+            if (split)
+            {
+                PageSplitIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "AccentBrush");
+            }
+            else
+            {
+                PageSplitIcon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty, new Binding("Foreground")
+                {
+                    RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(Button), 1)
+                });
+            }
+            PageSplitButton.ToolTip = split ? "Split view options (Ctrl+Shift+S closes the split)" : "Split view (Ctrl+Shift+S)";
+        }
+
+        private static MenuItem MakeMenuItem(string header, Action action, string gesture = null, bool enabled = true)
+        {
+            var item = new MenuItem { Header = header, InputGestureText = gesture, IsEnabled = enabled };
+            item.Click += (s, e) => action();
+            return item;
+        }
+
+        private static string ShortTitle(TabItem tab)
+        {
+            var title = (tab.Header as TabHeaderInfo)?.Title;
+            if (string.IsNullOrWhiteSpace(title)) title = "New Tab";
+            return title.Length > 42 ? title.Substring(0, 41) + "…" : title;
+        }
+
+        private void PageSplit_Click(object sender, RoutedEventArgs e)
+        {
+            var current = CurrentTab;
+            if (current == null) return;
+
+            var menu = new ContextMenu { PlacementTarget = PageSplitButton, Placement = PlacementMode.Bottom };
+
+            if (_splits.TryGetValue(current, out var split))
+            {
+                menu.Items.Add(MakeMenuItem("Swap sides", () => SwapSplit(split)));
+                menu.Items.Add(MakeMenuItem("Switch active pane", () => FocusOtherPane(), "F6"));
+                menu.Items.Add(MakeMenuItem("Reset pane sizes", () => ResetSplitRatio(split)));
+                menu.Items.Add(new Separator());
+                menu.Items.Add(MakeMenuItem("Close left page", () => CloseTab(split.Left, wholeGroup: false)));
+                menu.Items.Add(MakeMenuItem("Close right page", () => CloseTab(split.Right, wholeGroup: false)));
+                menu.Items.Add(new Separator());
+                menu.Items.Add(MakeMenuItem("Separate into two tabs", () => DissolveSplit(split, split.SecondaryActive), "Ctrl+Shift+S"));
+            }
+            else
+            {
+                menu.Items.Add(MakeMenuItem("Split with a new tab", () => { _ = AddNewTab(null, current); }, "Ctrl+Shift+S"));
+
+                var others = BrowserTabs.Items.OfType<TabItem>()
+                    .Where(t => t != current && !_splits.ContainsKey(t))
+                    .ToList();
+
+                if (others.Count > 0)
+                {
+                    menu.Items.Add(new Separator());
+                    menu.Items.Add(new MenuItem { Header = "Split with open tab", IsEnabled = false });
+                    foreach (var other in others)
+                    {
+                        var target = other;
+                        menu.Items.Add(MakeMenuItem(ShortTitle(target), () => SplitWithExistingTab(target)));
+                    }
+                }
+            }
+
+            menu.IsOpen = true;
+        }
+
+        // ================================================================
+        // Navigation
+        // ================================================================
+
+        // CurrentTab is the entry selected in the tab strip. ActiveTab is the page the
+        // toolbar talks to: the same tab normally, or the focused pane when that tab is
+        // a PageSplit. CurrentBrowser follows ActiveTab, so back/forward/reload/find/
+        // zoom/bookmark/address-bar all act on the pane the user is working in.
+        private TabItem CurrentTab => BrowserTabs.SelectedItem as TabItem;
+
+        private TabItem ActiveTab =>
+            CurrentTab is TabItem sel && _splits.TryGetValue(sel, out var split) ? split.Active : CurrentTab;
+
+        private WebView2 CurrentBrowser =>
+            ActiveTab is TabItem tab && _browsers.TryGetValue(tab, out var b) ? b : null;
+
+        private void Back_Click(object sender, RoutedEventArgs e)
+        {
+            if (CurrentBrowser?.CoreWebView2?.CanGoBack == true) CurrentBrowser.CoreWebView2.GoBack();
+        }
+
+        private void Forward_Click(object sender, RoutedEventArgs e)
+        {
+            if (CurrentBrowser?.CoreWebView2?.CanGoForward == true) CurrentBrowser.CoreWebView2.GoForward();
+        }
+
+        private void Refresh_Click(object sender, RoutedEventArgs e) => CurrentBrowser?.CoreWebView2?.Reload();
+
+        private void Home_Click(object sender, RoutedEventArgs e) => CurrentBrowser?.CoreWebView2?.Navigate(HomeUrl);
+
+        // Like other browsers: the first click into the address bar focuses it and
+        // selects the whole URL so the first keypress replaces it. Clicking again while
+        // it already has focus behaves like a normal text box (places the caret).
+        private void AddressBar_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!AddressBar.IsKeyboardFocusWithin)
+            {
+                e.Handled = true;
+                AddressBar.Focus();
+                AddressBar.SelectAll();
+            }
+        }
+
+        // Keyboard route in (Tab / Shift+Tab). Ctrl+L already selects explicitly.
+        private void AddressBar_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (e.OldFocus == null) return; // window re-activation: keep whatever was selected
+            Dispatcher.BeginInvoke(new Action(() => AddressBar.SelectAll()), DispatcherPriority.Input);
+        }
+
+        private void AddressBar_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) NavigateToAddressBar();
+        }
+
+        private void NavigateToAddressBar()
+        {
+            var input = AddressBar.Text.Trim();
+            if (string.IsNullOrEmpty(input) || CurrentBrowser?.CoreWebView2 == null) return;
+
+            if (input.Equals("lotus:newtab", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("lotus://newtab", StringComparison.OrdinalIgnoreCase) ||
+                input.Equals("lotus://newtab/", StringComparison.OrdinalIgnoreCase))
+            {
+                input = NewTabUrl;
+            }
+            else if (IsLotusSettingsUrl(input))
+            {
+                input = SettingsUrl;
+            }
+            else if (IsLotusSysInfoUrl(input))
+            {
+                input = SysInfoUrl;
+            }
+            else if (!input.StartsWith("http://") && !input.StartsWith("https://") &&
+                !input.StartsWith("view-source:") && !input.StartsWith("data:") &&
+                !input.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase))
+            {
+                input = (input.Contains(".") && !input.Contains(" "))
+                    ? "https://" + input
+                    : SearchUrl + Uri.EscapeDataString(input);
+            }
+
+            CurrentBrowser.CoreWebView2.Navigate(input);
+        }
+
+        // ================================================================
+        // Lotus-scheme pages (lotus://newtab/, lotus://settings/)
+        // ================================================================
+
+        // Shared by every lotus:// page. Two fixed layers: the theme's surface color, then the
+        // lotus photo multiplied into it (--bg-blend / --bg-opacity come from ThemeManager),
+        // so the image takes on whatever theme color is active and updates live.
+        // NOTE: pages must not put a background on <html>, or it would paint over these layers.
+        private const string LotusBackgroundCss = @"
+body::before, body::after { content:''; position:fixed; inset:0; pointer-events:none; }
+body::before { z-index:-2; background:var(--surface-secondary); }
+body::after { z-index:-1; background:url('lotus://assets/background.webp') right bottom / cover no-repeat;
+              mix-blend-mode:var(--bg-blend); opacity:var(--bg-opacity); }
+";
+
+        private static byte[] _backgroundImage;
+
+        private static byte[] LoadBackgroundImage()
+        {
+            if (_backgroundImage != null) return _backgroundImage;
+            using var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("Lotus.Background.webp");
+            if (stream == null) return null;
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            return _backgroundImage = ms.ToArray();
+        }
+
+        // Handles every request on the "lotus" scheme. lotus://newtab/ and
+        // lotus://settings/ resolve to real pages; anything else on the
+        // scheme comes back as a 404, same as a normal web server would.
+        private CoreWebView2WebResourceResponse BuildLotusResponse(CoreWebView2 core, string url)
+        {
+            if (Uri.TryCreate(url, UriKind.Absolute, out var assetUri) &&
+                string.Equals(assetUri.Host, "assets", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(assetUri.AbsolutePath, "/background.webp", StringComparison.OrdinalIgnoreCase))
+            {
+                var img = LoadBackgroundImage();
+                if (img != null)
+                {
+                    return core.Environment.CreateWebResourceResponse(
+                        new MemoryStream(img), 200, "OK",
+                        "Content-Type: image/webp\r\nCache-Control: public, max-age=86400");
+                }
+            }
+
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && IsLotusPageRoot(uri))
+            {
+                string html = null;
+                if (string.Equals(uri.Host, "newtab", StringComparison.OrdinalIgnoreCase))
+                {
+                    html = BuildNewTabPageHtml();
+                }
+                else if (string.Equals(uri.Host, "settings", StringComparison.OrdinalIgnoreCase))
+                {
+                    html = BuildSettingsPageHtml();
+                }
+                else if (string.Equals(uri.Host, "sysinfo", StringComparison.OrdinalIgnoreCase))
+                {
+                    html = BuildSysInfoPageHtml();
+                }
+
+                if (html != null)
+                {
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(html);
+                    return core.Environment.CreateWebResourceResponse(
+                        new MemoryStream(bytes), 200, "OK", "Content-Type: text/html; charset=utf-8");
+                }
+            }
+
+            return core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "");
+        }
+
+        private static bool IsLotusPageRoot(Uri uri) => uri.AbsolutePath == "/" || uri.AbsolutePath.Length == 0;
+
+        // The real lotus flower mark, reused as the on-page logo on every lotus://
+        // page and (via data URI) as each page's real favicon, so it flows through
+        // the same GetFaviconAsync pipeline that every other site's icon goes through.
+        // Fills are expressed as rgb() rather than hex so the '#' character never has to
+        // survive being embedded in a data: URI (a literal '#' would truncate the URL).
+        private static string LotusSvg(int size, bool cssVars = true)
+        {
+            // On-page logos use the theme CSS variables so they recolor live. The favicon
+            // can't (it's a standalone data: URI), so it gets the current theme's rgb() values.
+            string deep = cssVars ? "var(--logo-deep)" : ThemeManager.Rgb("LogoDeep");
+            string mid = cssVars ? "var(--logo-mid)" : ThemeManager.Rgb("LogoMid");
+            string light = cssVars ? "var(--logo-light)" : ThemeManager.Rgb("LogoLight");
+
+            return $@"<svg width='{size}' height='{size}' viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'>
+                <path style='fill:{deep};' d='M189.37,375.172c-2.521,5.258-3.991,10.68-3.991,16.26c0,25.565,27.584,48.348,70.621,63.188c43.037-14.84,70.621-37.623,70.621-63.188c0-5.4-1.389-10.651-3.756-15.75l-66.869-35.821L189.37,375.172z'/>
+                <path style='fill:{mid};' d='M384,286.897H128c-51.787,0-97.939,11.86-128,44.138C30.061,363.311,76.213,384,128,384s97.939-11.861,128-44.138C286.061,372.139,332.213,384,384,384s97.939-20.689,128-52.966C481.94,298.756,435.788,286.897,384,286.897z'/>
+                <path style='fill:{light};' d='M256,57.379c-37.657,33.171-61.793,84.096-61.793,141.241c0,13.591,1.405,26.815,3.993,39.548h115.601c2.588-12.733,3.992-25.955,3.992-39.548C317.793,141.476,293.657,90.55,256,57.379z'/>
+                <path style='fill:{light};' d='M194.207,216.276c-39.988-32.025-95.218-53.686-141.213-52.941c-0.905,42.244,19.834,87.86,60.902,123.57S207.42,340.651,256,339.864'/>
+                <path style='fill:{light};' d='M256,339.864c48.58,0.787,101.037-17.248,142.104-52.959s61.806-81.325,60.902-123.57c-45.364-0.735-101.518,21.783-141.213,52.94'/>
+                <path style='fill:{mid};' d='M105.952,216.294c-0.669,29.572,14.66,61.505,45.014,86.505c30.354,24.999,69.127,37.624,105.034,37.074l-52.965-88.286C173.479,229.166,139.948,215.772,105.952,216.294z'/>
+                <path style='fill:{mid};' d='M308.966,251.586L256,339.871c35.907,0.552,74.68-12.074,105.034-37.074c30.354-24.999,45.683-56.931,45.014-86.505C372.519,215.779,338.305,229.775,308.966,251.586z'/>
+                <path style='fill:{deep};' d='M194.207,260.414c0,32.143,24.136,60.79,61.793,79.448c37.657-18.658,61.793-47.305,61.793-79.448s-24.136-60.79-61.793-79.448C218.343,199.624,194.207,228.27,194.207,260.414z'/>
+            </svg>";
+        }
+
+        private static string LotusFaviconDataUri() => string.Join(" ",
+            LotusSvg(64, cssVars: false).Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+
+        private string BuildNewTabPageHtml()
+        {
+            var tiles = _bookmarks.Take(8).Select(b =>
+                $"<a class='tile' href='{System.Security.SecurityElement.Escape(b.Url)}'>" +
+                $"<div class='dot'></div><span>{System.Security.SecurityElement.Escape(b.Title)}</span></a>");
+
+            return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>New Tab</title>
+                <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
+                <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
+                <style>{LotusBackgroundCss}</style>
+                <style>
+                body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
+                        align-items:center; padding-top:110px; margin:0; }}
+                .logo {{ display:flex; align-items:center; gap:14px; margin-bottom:32px; }}
+                .logo span {{ font-size:42px; font-weight:600; color:var(--accent-dark); letter-spacing:.5px; }}
+                form {{ width:480px; }}
+                input {{ width:100%; height:44px; border-radius:22px; border:1px solid var(--input-border);
+                         padding:0 20px; font-size:15px; outline:none; box-shadow:0 1px 4px var(--shadow);
+                         background:var(--hover-soft); color:var(--text-primary); }}
+                .tiles {{ display:flex; gap:20px; margin-top:48px; flex-wrap:wrap; justify-content:center; max-width:520px; }}
+                .tile {{ display:flex; flex-direction:column; align-items:center; text-decoration:none; width:64px; }}
+                .dot {{ width:40px; height:40px; border-radius:50%; background:var(--hover-pink); margin-bottom:6px; }}
+                .tile span {{ font-size:11px; color:var(--text-secondary); text-align:center; white-space:nowrap;
+                              overflow:hidden; text-overflow:ellipsis; width:64px; }}
+                .settings-btn {{ position:fixed; top:18px; right:18px; width:38px; height:38px; border-radius:50%;
+                                  display:flex; align-items:center; justify-content:center;
+                                  background:var(--hover-soft); box-shadow:0 1px 4px var(--shadow);
+                                  text-decoration:none; }}
+                .settings-btn:hover {{ background:var(--hover-pink); }}
+                .settings-btn svg {{ stroke:var(--accent-dark); }}
+                </style></head><body>
+                <a class='settings-btn' href='{SettingsUrl}' title='Settings'>
+                    <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>
+                        <circle cx='12' cy='12' r='3'></circle>
+                        <path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'></path>
+                    </svg>
+                </a>
+                <div class='logo'>{LotusSvg(48)}<span>Lotus</span></div>
+                <form onsubmit=""window.location.href='{SearchUrl}'+encodeURIComponent(document.getElementById('q').value);return false;"">
+                    <input id='q' autofocus placeholder='Search the web'/>
+                </form>
+                <div class='tiles'>{string.Join("", tiles)}</div>
+                </body></html>";
+        }
+
+        // ---- Custom color picker (lotus://settings) --------------------------------------
+        // Plain raw strings (no brace escaping) injected into the page. All colors come
+        // from the theme CSS variables; the only literals are the picker's own color-model
+        // gradients (white/black/hue rainbow), which must stay fixed.
+        private const string ColorPickerCss = """
+.cp-row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; font-size:14px; color:var(--text-primary); }
+.cp-toggle { display:flex; align-items:center; gap:10px; font-family:inherit; font-size:13px; color:var(--text-primary);
+             background:var(--surface-softer); border:1px solid var(--input-border); border-radius:18px;
+             padding:4px 14px 4px 4px; cursor:pointer; }
+.cp-toggle:hover { border-color:var(--accent); }
+.cp-toggle:focus-visible, .cp-hex:focus { outline:2px solid var(--accent); outline-offset:1px; }
+.cp-swatch { width:24px; height:24px; border-radius:50%; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18); }
+.cp-panel { margin-top:6px; padding:14px; background:var(--surface-softer); border:1px solid var(--input-border); border-radius:12px; }
+.cp-panel[hidden] { display:none; }
+.cp-sv { position:relative; height:150px; border-radius:8px; cursor:crosshair; touch-action:none; user-select:none;
+         background:linear-gradient(to top,#000,rgba(0,0,0,0)), linear-gradient(to right,#fff,var(--cp-hue,#f00)); }
+.cp-hue { position:relative; height:14px; margin:14px 2px; border-radius:7px; cursor:pointer; touch-action:none; user-select:none;
+          background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }
+.cp-thumb { position:absolute; width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%; pointer-events:none;
+            border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 1px 4px rgba(0,0,0,.4); }
+.cp-hue-thumb { top:50%; }
+.cp-bottom { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.cp-hex { width:90px; height:30px; box-sizing:border-box; border-radius:15px; border:1px solid var(--input-border); padding:0 12px;
+          background:var(--hover-soft); color:var(--text-primary); font-family:Consolas,'Cascadia Mono',monospace; font-size:13px; outline:none; }
+.cp-presets { display:flex; gap:6px; flex-wrap:wrap; }
+.cp-preset { width:22px; height:22px; padding:0; border:none; border-radius:50%; cursor:pointer; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18); }
+.cp-preset:hover { transform:scale(1.15); }
+""";
+
+        private const string ColorPickerJs = """
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var panel = $('cpPanel'), toggle = $('cpToggle'), sv = $('cpSv'), svThumb = $('cpSvThumb'),
+      hue = $('cpHue'), hueThumb = $('cpHueThumb'), hex = $('cpHex'), swatch = $('cpSwatch'),
+      label = $('cpLabel'), presetsEl = $('cpPresets');
+  var H = 0, S = 1, V = 1, timer = null, pending = null;
+  var PRESETS = ['#DCE8F7', '#E4F2E7', '#F3E8FF', '#FFF1D6', '#1F2937', '#14213D', '#2B1B3D', '#0F1F1A'];
+
+  function clamp(n) { return Math.min(1, Math.max(0, n)); }
+
+  function hsvToRgb(h, s, v) {
+    var c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c, r, g, b;
+    if (h < 60) { r = c; g = x; b = 0; } else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; } else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
+    return [r + m, g + m, b + m].map(function (n) { return Math.round(n * 255); });
+  }
+  function toHex(rgb) {
+    return '#' + rgb.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join('');
+  }
+  function setFromHex(value) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(value.trim());
+    if (!m) return false;
+    var n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    r /= 255; g /= 255; b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min, h = H;
+    if (d > 0) {
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+      else if (max === g) h = ((b - r) / d + 2) * 60;
+      else h = ((r - g) / d + 4) * 60;
+    }
+    H = h; S = max === 0 ? 0 : d / max; V = max;   // grays keep the previous hue
+    return true;
+  }
+
+  function render() {
+    var color = toHex(hsvToRgb(H, S, V));
+    sv.style.setProperty('--cp-hue', toHex(hsvToRgb(H, 1, 1)));
+    svThumb.style.left = (S * 100) + '%';
+    svThumb.style.top = ((1 - V) * 100) + '%';
+    svThumb.style.background = color;
+    hueThumb.style.left = (H / 360 * 100) + '%';
+    hueThumb.style.background = toHex(hsvToRgb(H, 1, 1));
+    swatch.style.background = color;
+    label.textContent = color.toUpperCase();
+    if (document.activeElement !== hex) hex.value = color.toUpperCase();
+    return color;
+  }
+
+  function commit(isFinal) {
+    var color = render();
+    var radio = document.querySelector('input[name=theme][value=custom]');
+    if (radio) radio.checked = true;
+    if (isFinal) {
+      clearTimeout(timer); timer = null;
+      post('setCustomColor', true, color);
+      return;
+    }
+    pending = color;
+    if (timer) return;   // throttle live preview while dragging
+    timer = setTimeout(function () { timer = null; post('setCustomColor', true, pending); }, 90);
+  }
+
+  function drag(el, update) {
+    var active = false;
+    el.addEventListener('pointerdown', function (e) {
+      active = true; el.setPointerCapture(e.pointerId); update(e); commit(false); e.preventDefault();
+    });
+    el.addEventListener('pointermove', function (e) { if (active) { update(e); commit(false); } });
+    var end = function () { if (active) { active = false; commit(true); } };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+
+  drag(sv, function (e) {
+    var r = sv.getBoundingClientRect();
+    S = clamp((e.clientX - r.left) / r.width);
+    V = 1 - clamp((e.clientY - r.top) / r.height);
+  });
+  drag(hue, function (e) {
+    var r = hue.getBoundingClientRect();
+    H = clamp((e.clientX - r.left) / r.width) * 359.99;
+  });
+
+  hex.addEventListener('input', function () { if (setFromHex(hex.value)) commit(true); });
+  hex.addEventListener('blur', function () { hex.value = toHex(hsvToRgb(H, S, V)).toUpperCase(); });
+
+  PRESETS.forEach(function (c) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'cp-preset'; b.title = c; b.style.background = c;
+    b.addEventListener('click', function () { setFromHex(c); commit(true); });
+    presetsEl.appendChild(b);
+  });
+
+  toggle.addEventListener('click', function () {
+    panel.hidden = !panel.hidden;
+    toggle.setAttribute('aria-expanded', String(!panel.hidden));
+  });
+
+  setFromHex(panel.getAttribute('data-color'));
+  render();
+})();
+""";
+
+        // lotus://settings/ - a real page rendered the same way lotus://newtab/ is,
+        // sharing its color layout (background, card, and accent colors, logo mark,
+        // typography). Toggles/buttons post JSON messages back to the host over
+        // window.chrome.webview.postMessage; see HandleSettingsPageMessage.
+        private string BuildSettingsPageHtml()
+        {
+            string Toggle(string action, string label, bool isOn) => $@"
+                <label class='toggle-row'>
+                    <span>{System.Security.SecurityElement.Escape(label)}</span>
+                    <input type='checkbox' {(isOn ? "checked" : "")}
+                           onchange=""post('{action}', this.checked)"">
+                </label>";
+
+            string ThemeOption(LotusTheme theme, string label)
+            {
+                string key = ThemeManager.KeyOf(theme);
+                return $@"
+                <label class='toggle-row'>
+                    <span>{label}</span>
+                    <input type='radio' name='theme' value='{key}' {(ThemeManager.Current == theme ? "checked" : "")}
+                           onchange=""post('setTheme', true, '{key}')"">
+                </label>";
+            }
+
+            bool showBookmarksBar = BookmarksBar.Visibility == Visibility.Visible;
+            bool isDefaultBrowser = DefaultBrowserRegistrar.IsCurrentDefault();
+
+            string defaultBrowserSection = isDefaultBrowser
+                ? "<p class='muted'>Lotus is your default browser.</p>"
+                : @"<p class='muted'>Lotus is not currently your default browser.</p>
+                   <button class='accent-btn' onclick=""post('setDefaultBrowser')"">Make Lotus my default browser</button>";
+
+            return $@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>Settings</title>
+                <link rel='icon' type='image/svg+xml' href=""data:image/svg+xml,{LotusFaviconDataUri()}"">
+                <style id='lotus-theme'>{ThemeManager.BuildCssVariables()}</style>
+                <style>{LotusBackgroundCss}</style>
+                <style>
+                body {{ background:var(--surface-secondary); font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column;
+                        align-items:center; padding:70px 20px 60px; margin:0; color:var(--text-primary); }}
+                .logo {{ display:flex; align-items:center; gap:14px; margin-bottom:36px; }}
+                .logo span {{ font-size:32px; font-weight:600; color:var(--accent-dark); letter-spacing:.5px; }}
+                .page {{ width:100%; max-width:520px; }}
+                .card {{ background:var(--hover-soft); border-radius:14px; padding:20px 22px; margin-bottom:20px;
+                         box-shadow:0 1px 4px var(--shadow); }}
+                .card h2 {{ margin:0 0 14px; font-size:14px; font-weight:600; color:var(--accent-dark);
+                            text-transform:uppercase; letter-spacing:.5px; }}
+                .toggle-row {{ display:flex; align-items:center; justify-content:space-between;
+                               padding:9px 0; font-size:14px; color:var(--text-primary); cursor:pointer; }}
+                .toggle-row input[type=checkbox], .toggle-row input[type=radio] {{ accent-color:var(--accent); width:18px; height:18px; cursor:pointer; }}
+                {ColorPickerCss}
+                .muted {{ font-size:12.5px; color:var(--text-muted); margin:2px 0 14px; }}
+                .accent-btn {{ font-family:inherit; font-size:13px; border:none; border-radius:18px;
+                               padding:9px 18px; background:var(--accent); color:var(--on-accent); cursor:pointer; }}
+                .accent-btn:hover {{ background:var(--accent-hover); }}
+                </style></head><body>
+                <div class='logo'>{LotusSvg(40)}<span>Settings</span></div>
+                <div class='page'>
+
+                    <div class='card'>
+                        <h2>Appearance</h2>
+                        {ThemeOption(LotusTheme.Light, "Lotus Light")}
+                        {ThemeOption(LotusTheme.Dark, "Lotus Dark")}
+                        {ThemeOption(LotusTheme.Custom, "Custom")}
+                        <div class='cp-row'>
+                            <span>Custom color</span>
+                            <button type='button' class='cp-toggle' id='cpToggle' aria-expanded='false'>
+                                <span class='cp-swatch' id='cpSwatch'></span><span id='cpLabel'></span>
+                            </button>
+                        </div>
+                        <div class='cp-panel' id='cpPanel' data-color='{ThemeManager.CustomColorHex}' hidden>
+                            <div class='cp-sv' id='cpSv'><div class='cp-thumb' id='cpSvThumb'></div></div>
+                            <div class='cp-hue' id='cpHue'><div class='cp-thumb cp-hue-thumb' id='cpHueThumb'></div></div>
+                            <div class='cp-bottom'>
+                                <input type='text' class='cp-hex' id='cpHex' maxlength='7' spellcheck='false' autocomplete='off' aria-label='Hex color'>
+                                <div class='cp-presets' id='cpPresets'></div>
+                            </div>
+                        </div>
+                        <p class='muted' style='margin-bottom:0;'>Pick a color and Lotus builds a matching theme around it. Dark colors give a dark theme.</p>
+                    </div>
+
+                    <div class='card'>
+                        <h2>Browsing</h2>
+                        {Toggle("setShowBookmarksBar", "Show bookmarks bar", showBookmarksBar)}
+                    </div>
+
+                    <div class='card'>
+                        <h2>Privacy &amp; Security</h2>
+                        {Toggle("setTrackerBlock", "Block trackers & ad scripts", _trackerBlockEnabled)}
+                        {Toggle("setHttpsOnly", "HTTPS-only mode", _httpsOnlyEnabled)}
+                        {Toggle("setPopupBlock", "Block pop-ups", _popupBlockEnabled)}
+                        <p class='muted' style='margin-top:14px;'>{_blockedCount} trackers blocked this session</p>
+                        <button class='accent-btn' onclick=""post('clearBrowsingData')"">Clear browsing data</button>
+                    </div>
+
+                    <div class='card'>
+                        <h2>Default browser</h2>
+                        {defaultBrowserSection}
+                    </div>
+
+                </div>
+                <script>
+                function post(action, value, text) {{
+                    window.chrome.webview.postMessage(JSON.stringify({{
+                        action: action, value: !!value, text: text === undefined ? null : String(text)
+                    }}));
+                }}
+
+                {ColorPickerJs}
+                </script>
+                </body></html>";
+        }
+
+        // ================================================================
+        // Bookmarks
+        // ================================================================
+
+        private void RefreshBookmarksUI()
+        {
+            BookmarksList.ItemsSource = null;
+            BookmarksList.ItemsSource = _bookmarks;
+        }
+
+        private bool IsBookmarked(string url) => !string.IsNullOrEmpty(url) && _bookmarks.Any(b => b.Url == url);
+
+        private void UpdateBookmarkStar()
+        {
+            var url = CurrentBrowser?.CoreWebView2?.Source;
+            bool marked = IsBookmarked(url);
+            // Resource references (not fixed brushes) so the star follows theme changes.
+            string brushKey = marked ? "AccentBrush" : "TextMutedBrush";
+            BookmarkStar.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, brushKey);
+            if (marked) BookmarkStar.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, brushKey);
+            else BookmarkStar.Fill = Brushes.Transparent;
+        }
+
+        private void ToggleBookmarkCurrent()
+        {
+            var url = CurrentBrowser?.CoreWebView2?.Source;
+            if (string.IsNullOrEmpty(url)) return;
+
+            var existing = _bookmarks.FirstOrDefault(b => b.Url == url);
+            if (existing != null)
+            {
+                _bookmarks.Remove(existing);
+            }
+            else
+            {
+                var title = CurrentBrowser.CoreWebView2.DocumentTitle;
+                _bookmarks.Insert(0, new BookmarkEntry
+                {
+                    Title = string.IsNullOrWhiteSpace(title) ? url : title,
+                    Url = url
+                });
+            }
+
+            SaveBookmarks();
+            RefreshBookmarksUI();
+            UpdateBookmarkStar();
+        }
+
+        private void BookmarkStar_Click(object sender, MouseButtonEventArgs e) => ToggleBookmarkCurrent();
+
+        private void BookmarkChip_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string url)
+            {
+                CurrentBrowser?.CoreWebView2?.Navigate(url);
+            }
+        }
+
+        private void SetShowBookmarksBar(bool show)
+        {
+            BookmarksBar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // ================================================================
+        // History
+        // ================================================================
+
+        private void ToggleHistory_Click(object sender, RoutedEventArgs e)
+        {
+            if (HistoryPanel.Visibility == Visibility.Visible)
+            {
+                HistoryPanel.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                HistoryList.ItemsSource = null;
+                HistoryList.ItemsSource = _history;
+                HistoryPanel.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void HistoryList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            if (HistoryList.SelectedItem is HistoryEntry entry)
+            {
+                CurrentBrowser?.CoreWebView2?.Navigate(entry.Url);
+                HistoryPanel.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void ClearHistory_Click(object sender, RoutedEventArgs e)
+        {
+            _history.Clear();
+            SaveHistory();
+            HistoryList.ItemsSource = null;
+            HistoryList.ItemsSource = _history;
+        }
+
+        // ================================================================
+        // Downloads
+        // ================================================================
+
+        private void ToggleDownloads_Click(object sender, RoutedEventArgs e)
+        {
+            DownloadShelf.Visibility = DownloadShelf.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        private void DownloadItem_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is Border b && b.Tag is DownloadItem item && File.Exists(item.FilePath))
+            {
+                try { System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{item.FilePath}\""); } catch { }
+            }
+        }
+
+        // ================================================================
+        // Find in page
+        // ================================================================
+
+        private void ShowFindBar_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFindBar();
+        }
+
+        private void OpenFindBar()
+        {
+            FindBar.Visibility = Visibility.Visible;
+            FindBox.Focus();
+            FindBox.SelectAll();
+        }
+
+        private void FindClose_Click(object sender, RoutedEventArgs e)
+        {
+            FindBar.Visibility = Visibility.Collapsed;
+            _ = CurrentBrowser?.CoreWebView2?.ExecuteScriptAsync("window.getSelection().removeAllRanges();");
+        }
+
+        private void FindBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) DoFind(Keyboard.Modifiers == ModifierKeys.Shift);
+            else if (e.Key == Key.Escape) FindClose_Click(sender, e);
+        }
+
+        private void FindBox_TextChanged(object sender, TextChangedEventArgs e) => DoFind(false);
+
+        private void FindNext_Click(object sender, RoutedEventArgs e) => DoFind(false);
+        private void FindPrev_Click(object sender, RoutedEventArgs e) => DoFind(true);
+
+        private async void DoFind(bool backwards)
+        {
+            if (CurrentBrowser?.CoreWebView2 == null) return;
+            var query = FindBox.Text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            if (string.IsNullOrEmpty(query)) return;
+            var back = backwards ? "true" : "false";
+            await CurrentBrowser.CoreWebView2.ExecuteScriptAsync(
+                $"window.find(\"{query}\", false, {back}, true, false, true, false)");
+        }
+
+        // ================================================================
+        // Zoom
+        // ================================================================
+        // (Zoom is per-tab and no longer has a menu UI of its own - Ctrl +/-/0
+        // still drive it via SetZoom, see HandleShortcut below.)
+
+        private void SetZoom(double factor)
+        {
+            if (CurrentBrowser == null) return;
+            factor = Math.Max(0.25, Math.Min(3.0, factor));
+            CurrentBrowser.ZoomFactor = factor;
+        }
+
+        // ================================================================
+        // Misc actions
+        // ================================================================
+
+        private void Print_Click(object sender, RoutedEventArgs e)
+        {
+            CurrentBrowser?.CoreWebView2?.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
+        }
+
+        private void ViewSource_Click(object sender, RoutedEventArgs e)
+        {
+            var url = CurrentBrowser?.CoreWebView2?.Source;
+            if (!string.IsNullOrEmpty(url)) CurrentBrowser.CoreWebView2.Navigate("view-source:" + url);
+        }
+
+        private void DevTools_Click(object sender, RoutedEventArgs e)
+        {
+            CurrentBrowser?.CoreWebView2?.OpenDevToolsWindow();
+        }
+
+        // ================================================================
+        // Settings page (lotus://settings/)
+        // ================================================================
+
+        // Recognizes lotus://settings (with or without a trailing slash) and the
+        // lotus:settings shorthand, mirroring how lotus://newtab/ is matched below.
+        private static bool IsLotusSettingsUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            return url.Equals("lotus:settings", StringComparison.OrdinalIgnoreCase) ||
+                   url.Equals("lotus://settings", StringComparison.OrdinalIgnoreCase) ||
+                   url.Equals("lotus://settings/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // The settings page's toggles and buttons talk back to the host over
+        // window.chrome.webview.postMessage, as a small JSON envelope:
+        // {"action":"setTrackerBlock","value":true}. See BuildSettingsPageHtml
+        // for the page that sends these.
+        private sealed class SettingsPageMessage
+        {
+            public string Action { get; set; }
+            public bool Value { get; set; }
+            public string Text { get; set; }
+        }
+
+        private void HandleSettingsPageMessage(string rawJson)
+        {
+            if (string.IsNullOrWhiteSpace(rawJson)) return;
+
+            SettingsPageMessage msg;
+            try
+            {
+                msg = JsonSerializer.Deserialize<SettingsPageMessage>(rawJson,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch { return; }
+
+            if (msg?.Action == null) return;
+
+            switch (msg.Action)
+            {
+                case "setTrackerBlock": _trackerBlockEnabled = msg.Value; break;
+                case "setHttpsOnly": _httpsOnlyEnabled = msg.Value; break;
+                case "setPopupBlock": _popupBlockEnabled = msg.Value; break;
+                case "setShowBookmarksBar": SetShowBookmarksBar(msg.Value); break;
+                case "clearBrowsingData": _ = ClearBrowsingDataAsync(); break;
+                case "setTheme":
+                    if (ThemeManager.TryParseKey(msg.Text, out var requestedTheme))
+                    {
+                        ThemeManager.SetTheme(requestedTheme);
+                    }
+                    break;
+                case "setCustomColor": ThemeManager.SetCustomColor(msg.Text); break;
+                case "setDefaultBrowser":
+                    // Registration already ran at construction time, so Lotus is
+                    // guaranteed to be in the list Windows shows here. Windows itself
+                    // requires the user to make the final pick - no way around that
+                    // by design, on any app.
+                    DefaultBrowserRegistrar.OpenDefaultAppsSettings();
+                    break;
+            }
+        }
+
+        private async Task ClearBrowsingDataAsync()
+        {
+            if (CurrentBrowser?.CoreWebView2?.Profile == null) return;
+
+            await CurrentBrowser.CoreWebView2.Profile.ClearBrowsingDataAsync(
+                CoreWebView2BrowsingDataKinds.AllSite |
+                CoreWebView2BrowsingDataKinds.CacheStorage |
+                CoreWebView2BrowsingDataKinds.BrowsingHistory |
+                CoreWebView2BrowsingDataKinds.Cookies);
+
+            MessageBox.Show("Browsing data cleared.", "Lotus",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        // ================================================================
+        // Keyboard shortcuts
+        // ================================================================
+
+        private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            // With Alt held WPF reports Key.System and puts the real key in SystemKey.
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (HandleShortcut(key, Keyboard.Modifiers))
+            {
+                e.Handled = true;
+            }
+            await Task.CompletedTask;
+        }
+
+        private bool HandleShortcut(Key key, ModifierKeys mods)
+        {
+            bool ctrl = (mods & ModifierKeys.Control) != 0;
+            bool shift = (mods & ModifierKeys.Shift) != 0;
+            bool alt = (mods & ModifierKeys.Alt) != 0;
+
+            if (ctrl && shift && key == Key.T) { _ = ReopenClosedTab(); return true; }
+            if (ctrl && shift && key == Key.S) { TogglePageSplit(); return true; }
+            if (!ctrl && !shift && !alt && key == Key.F6 && FocusOtherPane()) return true;
+            if (ctrl && shift && key == Key.I) { CurrentBrowser?.CoreWebView2?.OpenDevToolsWindow(); return true; }
+
+            if (ctrl && key == Key.T) { _ = AddNewTab(null); return true; }
+            if (ctrl && key == Key.W) { if (ActiveTab != null) CloseTab(ActiveTab, wholeGroup: false); return true; }
+            if (ctrl && key == Key.L) { AddressBar.Focus(); AddressBar.SelectAll(); return true; }
+            if (ctrl && (key == Key.R || key == Key.F5)) { CurrentBrowser?.CoreWebView2?.Reload(); return true; }
+            if (key == Key.F5) { CurrentBrowser?.CoreWebView2?.Reload(); return true; }
+            if (ctrl && key == Key.D) { ToggleBookmarkCurrent(); return true; }
+            if (ctrl && key == Key.H) { ToggleHistory_Click(null, null); return true; }
+            if (ctrl && key == Key.J) { ToggleDownloads_Click(null, null); return true; }
+            if (ctrl && key == Key.F) { OpenFindBar(); return true; }
+            if (ctrl && key == Key.P) { CurrentBrowser?.CoreWebView2?.ShowPrintUI(CoreWebView2PrintDialogKind.Browser); return true; }
+            if (ctrl && key == Key.U) { ViewSource_Click(null, null); return true; }
+
+            if (ctrl && (key == Key.OemPlus || key == Key.Add)) { SetZoom((CurrentBrowser?.ZoomFactor ?? 1) + 0.1); return true; }
+            if (ctrl && (key == Key.OemMinus || key == Key.Subtract)) { SetZoom((CurrentBrowser?.ZoomFactor ?? 1) - 0.1); return true; }
+            if (ctrl && key == Key.D0) { SetZoom(1.0); return true; }
+
+            if (ctrl && key == Key.Tab && !shift) { SwitchTabRelative(1); return true; }
+            if (ctrl && key == Key.Tab && shift) { SwitchTabRelative(-1); return true; }
+
+            if (ctrl && key >= Key.D1 && key <= Key.D9)
+            {
+                int index = key - Key.D1;
+                SwitchToTabIndex(index);
+                return true;
+            }
+
+            if (alt && key == Key.Left) { Back_Click(null, null); return true; }
+            if (alt && key == Key.Right) { Forward_Click(null, null); return true; }
+
+            if (key == Key.Escape)
+            {
+                if (FindBar.Visibility == Visibility.Visible) { FindClose_Click(null, null); return true; }
+            }
+
+            return false;
+        }
+
+        private void SwitchTabRelative(int direction)
+        {
+            if (BrowserTabs.Items.Count == 0) return;
+            int index = BrowserTabs.SelectedIndex + direction;
+            if (index < 0) index = BrowserTabs.Items.Count - 1;
+            if (index >= BrowserTabs.Items.Count) index = 0;
+            BrowserTabs.SelectedIndex = index;
+        }
+
+        private void SwitchToTabIndex(int index)
+        {
+            if (index >= 0 && index < BrowserTabs.Items.Count) BrowserTabs.SelectedIndex = index;
+        }
+
+        // ================================================================
+        // UI sync
+        // ================================================================
+
+        private void UpdateAddressBar()
+        {
+            AddressBar.Text = CurrentBrowser?.CoreWebView2?.Source ?? string.Empty;
+        }
+
+        private void UpdateNavButtons()
+        {
+            BackButton.IsEnabled = CurrentBrowser?.CoreWebView2?.CanGoBack == true;
+            ForwardButton.IsEnabled = CurrentBrowser?.CoreWebView2?.CanGoForward == true;
+        }
+
+        private void UpdateSecurityIcon(WebView2 browser)
+        {
+            var source = browser?.CoreWebView2?.Source ?? "";
+            bool secure = source.StartsWith("https://") || string.IsNullOrEmpty(source) ||
+                source.StartsWith("lotus://", StringComparison.OrdinalIgnoreCase);
+            SecurityIcon.Data = (Geometry)FindResource(secure ? "IconLock" : "IconWarning");
+            SecurityIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty,
+                secure ? "SecureBrush" : "InsecureBrush");
+            SecurityIcon.ToolTip = secure ? "Connection is secure" : "Connection is not secure";
+        }
+    }
+
+    // ====================================================================
+    // Support models
+    // ====================================================================
+
+    public class TabHeaderInfo : INotifyPropertyChanged
+    {
+        private string _title = "New Tab";
+        private ImageSource _favicon;
+        private bool _isLoading;
+
+        public string Title
+        {
+            get => _title;
+            set { _title = value; OnChanged(nameof(Title)); OnChanged(nameof(DisplayTitle)); }
+        }
+
+        private bool _isSplit;
+        private string _splitTitle;
+
+        // True while this tab holds two pages side by side (PageSplit).
+        public bool IsSplit
+        {
+            get => _isSplit;
+            set { _isSplit = value; OnChanged(nameof(IsSplit)); OnChanged(nameof(DisplayTitle)); }
+        }
+
+        // Title of the page in the second pane.
+        public string SplitTitle
+        {
+            get => _splitTitle;
+            set { _splitTitle = value; OnChanged(nameof(SplitTitle)); OnChanged(nameof(DisplayTitle)); }
+        }
+
+        // What the tab strip actually shows: "A" normally, "A  |  B" while split.
+        public string DisplayTitle => _isSplit ? $"{_title}  |  {_splitTitle}" : _title;
+
+        public ImageSource Favicon
+        {
+            get => _favicon;
+            set
+            {
+                _favicon = value;
+                OnChanged(nameof(Favicon));
+                OnChanged(nameof(ShowFavicon));
+                OnChanged(nameof(ShowFallbackDot));
+            }
+        }
+
+        // True while the tab's WebView2 is between NavigationStarting and
+        // NavigationCompleted. Drives the Lotus spinner in the favicon slot.
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set
+            {
+                _isLoading = value;
+                OnChanged(nameof(IsLoading));
+                OnChanged(nameof(ShowFavicon));
+                OnChanged(nameof(ShowFallbackDot));
+            }
+        }
+
+        // The real page favicon is only shown once the page is done loading
+        // AND a favicon was actually delivered via FaviconChanged.
+        public bool ShowFavicon => !IsLoading && Favicon != null;
+
+        // The fallback globe is only shown when the page is done loading AND
+        // we have no favicon to display for it.
+        public bool ShowFallbackDot => !IsLoading && Favicon == null;
+
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    public class BookmarkEntry
+    {
+        public string Title { get; set; }
+        public string Url { get; set; }
+    }
+
+    public class HistoryEntry
+    {
+        public string Title { get; set; }
+        public string Url { get; set; }
+        public DateTime VisitedAt { get; set; }
+    }
+
+    public class DownloadItem : INotifyPropertyChanged
+    {
+        public string FileName { get; set; }
+        public string FilePath { get; set; }
+
+        private double _progress;
+        public double Progress
+        {
+            get => _progress;
+            set { _progress = value; OnChanged(nameof(Progress)); }
+        }
+
+        private string _statusText;
+        public string StatusText
+        {
+            get => _statusText;
+            set { _statusText = value; OnChanged(nameof(StatusText)); }
+        }
+
+        private bool _isInProgress;
+        public bool IsInProgress
+        {
+            get => _isInProgress;
+            set { _isInProgress = value; OnChanged(nameof(IsInProgress)); }
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+}

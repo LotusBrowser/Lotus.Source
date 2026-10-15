@@ -1,7 +1,7 @@
 using System;
 using Microsoft.Win32;
 
-namespace TerminalOS
+namespace Lotus.Browser
 {
     // Registers Lotus as a Windows browser candidate so it shows up in
     // Settings > Apps > Default apps, and lets the app query whether it is

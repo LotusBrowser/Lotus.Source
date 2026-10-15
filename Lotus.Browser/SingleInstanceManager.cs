@@ -4,7 +4,7 @@ using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace TerminalOS
+namespace Lotus.Browser
 {
     // When Lotus is the default browser, Windows launches a brand new Lotus.exe
     // process every time the user clicks a link elsewhere - it does not know

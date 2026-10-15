@@ -14,7 +14,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>LotusSetup</AssemblyName>
     <RootNamespace>Lotus.Installer</RootNamespace>
-    <ApplicationIcon>..\TerminalOS\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\Lotus.Browser\icon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.0.0</Version>
     <IncludeSourceRevisionInId>false</IncludeSourceRevisionInId>

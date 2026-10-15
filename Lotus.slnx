@@ -1,4 +1,4 @@
 <Solution>
-  <Project Path="TerminalOS/TerminalOS.csproj" />
+  <Project Path="Lotus.Browser/Lotus.Browser.csproj" />
   <Project Path="Lotus.Installer/Lotus.Installer.csproj" />
 </Solution>

@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace TerminalOS
+namespace Lotus.Browser
 {
     public partial class App : Application
     {

@@ -9,7 +9,7 @@
     4. Appends payload.zip to the stub: [exe][payload.zip][int64 length]["LOTUSPAY"].
 
     No Inno Setup (or any other tool) required - just the .NET SDK.
-    Output: TerminalOS\installer-output\Setup-Lotus-<version>.exe
+    Output: Lotus.Browser\installer-output\Setup-Lotus-<version>.exe
 
     Installer switches (for scripting / winget):
       Setup-Lotus-1.0.0.exe /silent [/dir=C:\path] [/nodesktop]
@@ -24,12 +24,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Stops the TerminalOS.csproj post-build hook from calling this script again.
+# Stops the Lotus.Browser.csproj post-build hook from calling this script again.
 $env:LOTUS_PUBLISHING = "1"
 
 $root       = $PSScriptRoot
 $repo       = Split-Path $root -Parent
-$appProj    = Join-Path $root "TerminalOS.csproj"
+$appProj    = Join-Path $root "Lotus.Browser.csproj"
 $setupProj  = Join-Path $repo "Lotus.Installer\Lotus.Installer.csproj"
 $publishDir = Join-Path $root "publish\$Runtime"
 $work       = Join-Path $root "installer-build"
