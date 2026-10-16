@@ -419,7 +419,7 @@ namespace Lotus.Browser
 
         // splitWith: when set, the new page is created as the right-hand pane of
         // that tab's PageSplit instead of getting a tab of its own.
-        private async Task<TabItem> AddNewTab(string url, TabItem splitWith = null)
+        private async Task<TabItem> AddNewTab(string url, TabItem splitWith = null, CoreWebView2NewWindowRequestedEventArgs openerArgs = null)
         {
             if (splitWith != null && _splits.ContainsKey(splitWith)) return null;
 
@@ -474,6 +474,14 @@ namespace Lotus.Browser
                     UpdateBookmarkStar();
                 }
             };
+
+            if (openerArgs != null)
+            {
+                // Popup/new-tab opened by script: hand this WebView2 back to the opener so
+                // window.opener, postMessage and window.close() keep working.
+                openerArgs.NewWindow = browser.CoreWebView2;
+                return tab;
+            }
 
             browser.CoreWebView2.Navigate(string.IsNullOrEmpty(url) ? NewTabUrl : url);
             return tab;
@@ -533,18 +541,10 @@ namespace Lotus.Browser
                 }
             };
 
-            core.NewWindowRequested += (s, e) =>
-            {
-                if (_popupBlockEnabled)
-                {
-                    e.Handled = true;
-                }
-                else
-                {
-                    e.Handled = true;
-                    _ = AddNewTab(e.Uri);
-                }
-            };
+            core.NewWindowRequested += (s, e) => OnNewWindowRequested(e);
+
+            core.WindowCloseRequested += (s, e) =>
+                Dispatcher.BeginInvoke(new Action(() => CloseTab(tab)));
 
             core.PermissionRequested += (s, e) =>
             {
@@ -666,6 +666,75 @@ namespace Lotus.Browser
             // Chromium's built-in accelerator handling, so they bubble up to
             // Window_PreviewKeyDown even while focus is inside the page.
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+        }
+
+        // ================================================================
+        // Popups / window.open
+        // ================================================================
+
+        private void OnNewWindowRequested(CoreWebView2NewWindowRequestedEventArgs e)
+        {
+            e.Handled = true;
+
+            if (_popupBlockEnabled && !e.IsUserInitiated)
+            {
+                _blockedCount++;
+                return;
+            }
+
+            var deferral = e.GetDeferral();
+            bool sizedPopup = e.WindowFeatures.HasSize || e.WindowFeatures.HasPosition;
+            _ = sizedPopup ? OpenPopupWindow(e, deferral) : OpenOpenerTab(e, deferral);
+        }
+
+        private async Task OpenOpenerTab(CoreWebView2NewWindowRequestedEventArgs e, CoreWebView2Deferral deferral)
+        {
+            try { await AddNewTab(null, null, e); }
+            catch { }
+            finally { deferral.Complete(); }
+        }
+
+        private async Task OpenPopupWindow(CoreWebView2NewWindowRequestedEventArgs e, CoreWebView2Deferral deferral)
+        {
+            Window win = null;
+            WebView2 popup = null;
+            try
+            {
+                var f = e.WindowFeatures;
+                popup = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.White };
+                win = new Window
+                {
+                    Owner = this,
+                    Title = "Lotus",
+                    Icon = Icon,
+                    Width = (f.HasSize ? f.Width : 500) + 16,
+                    Height = (f.HasSize ? f.Height : 700) + 39,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Content = popup
+                };
+                win.Closed += (s2, e2) => { try { popup.Dispose(); } catch { } };
+                win.Show();
+
+                await popup.EnsureCoreWebView2Async(_normalEnv);
+                var pc = popup.CoreWebView2;
+                pc.Settings.UserAgent = StandardUserAgent;
+
+                var w = win;
+                pc.DocumentTitleChanged += (s2, e2) =>
+                    w.Title = string.IsNullOrWhiteSpace(pc.DocumentTitle) ? "Lotus" : pc.DocumentTitle;
+                pc.WindowCloseRequested += (s2, e2) => w.Close();
+                pc.NewWindowRequested += (s2, e2) => OnNewWindowRequested(e2);
+
+                e.NewWindow = pc;
+            }
+            catch
+            {
+                try { win?.Close(); } catch { }
+            }
+            finally
+            {
+                deferral.Complete();
+            }
         }
 
         // Sites reached by "localhost", "127.0.0.1", a bare LAN/direct IP, or a
